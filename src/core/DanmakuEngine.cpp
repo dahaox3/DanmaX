@@ -194,7 +194,9 @@ void Engine::tick(double position, double elapsed, bool playing, const Measure& 
         // Hidden maintenance advances existing objects without measuring/spawning new text.
         if (!emitNew)
             ++suppressedWhileHidden_;
-        else if (items_[cursor_].time >= position - 0.4) {
+        // A deliberately slow frame still owns all comments due since the last
+        // tick. Seeks already reset the cursor, so this does not replay old text.
+        else if (items_[cursor_].time >= std::min(lastPosition_, position - 0.4)) {
             if (!spawn(cursor_, measure(items_[cursor_])))
                 ++dropped_;
         } else

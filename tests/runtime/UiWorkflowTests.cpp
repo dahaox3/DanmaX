@@ -250,6 +250,40 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void frameRateSettingKeyboardAndPersistence() {
+        QTemporaryDir directory;
+        AppController backend(directory.filePath("data"), nullptr, {}, directory.filePath("cache"));
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
+        settings->setDanmakuServers({});
+        settings->setValue("micaEnabled", false);
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}, {"selectedPage", 3}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* page = window->findChild<QQuickItem*>("settingsPage"); QVERIFY(page);
+        auto* spin = window->findChild<QQuickItem*>("maxFpsSpinBox"); QVERIFY(spin);
+        QCOMPARE(spin->property("value").toInt(), 0);
+        QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(spin))));
+        auto* input = spin->property("contentItem").value<QQuickItem*>(); QVERIFY(input);
+        input->forceActiveFocus();
+        QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+        QInputMethodEvent commit;
+        commit.setCommitString("144");
+        QCoreApplication::sendEvent(window, &commit);
+        QTest::keyClick(window, Qt::Key_Return);
+        QTRY_COMPARE(settings->values().value("maxFps").toInt(), 144);
+        settings->flushPending();
+        SettingsStore restored(directory.filePath("data"));
+        QCOMPARE(restored.values().value("maxFps").toInt(), 144);
+        QVERIFY(settings->setValue("maxFps", 0));
+        QTRY_COMPARE(spin->property("value").toInt(), 0);
+        QCOMPARE(warnings.count(), 0);
+    }
+
     void mainShellLayoutAndVectorIcons() {
         QTemporaryDir directory; AppController backend(directory.path());
         auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});

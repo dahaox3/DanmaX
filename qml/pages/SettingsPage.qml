@@ -89,6 +89,16 @@ PageFrame {
 
     SettingsSection {
         title: I18n.settings.playbackSection; Layout.fillWidth: true
+        SettingsRow {
+            title: I18n.settings.maxFpsTitle
+            description: I18n.settings.maxFpsDesc
+            SpinBox {
+                objectName: "maxFpsSpinBox"
+                from: 0; to: 1000; value: page.values.maxFps; editable: true
+                Accessible.name: I18n.settings.maxFpsAccessible
+                onValueModified: page.put("maxFps", value)
+            }
+        }
         Repeater {
             model: [
                 {key: "speed", title: I18n.settings.speedTitle, acc: I18n.settings.speedAccessible, min: 30, max: 1500},

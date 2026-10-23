@@ -51,6 +51,8 @@ const QList<Setting>& schema() {
          "是否允许滚动弹幕与固定字幕重叠：true=允许，false=禁止，默认：false。\n同类始终避让，顶部与底部固定字幕也互相避让；无可用位置时丢弃新弹幕。"},
         {"Danmaku", "chineseConversion", "off",
          "弹幕简繁转换：off=保持原样，simplified=转为简体中文，traditional=转为繁体中文。默认：off。\n修改后即时对当前与后续弹幕生效。"},
+        {"Rendering", "maxFps", 0,
+         "弹幕帧率上限，单位：帧/秒；整数 0～1000，默认：0。\n0 表示不限帧，跟随显示器刷新；其他值限制连续弹幕刷新，即时生效，不改变滚动速度和固定字幕寿命。"},
         {"Rendering", "textureBudgetAuto", true,
          "文字图片预算模式：true=按当前活动弹幕需求自动调整，false=手动固定预算。默认：true。\n自动从最多 64 MiB 起步，预留 25% 余量并分档增长，持续低需求 10 秒后收缩；不查询系统可用显存。"},
         {"Rendering", "textureBudgetMiB", 512,
@@ -99,7 +101,7 @@ QVariant checked(const QString& key, const QVariant& value, const QVariant& fall
         {"fontSize", {10, 72}},   {"strokeWidth", {0, 6}},   {"opacity", {0.05, 1}},
         {"speed", {30, 1500}},    {"fixedSeconds", {1, 30}}, {"maxActive", {50, 5000}},
         {"maxTracks", {1, 60}},   {"lineSpacing", {0, 2}},   {"timeOffset", {-120, 120}},
-        {"screenIndex", {0, 32}}, {"onTop", {0, 1}}, {"textureBudgetMiB", {32, 1024}}};
+        {"screenIndex", {0, 32}}, {"onTop", {0, 1}}, {"textureBudgetMiB", {32, 1024}}, {"maxFps", {0, 1000}}};
     if (ranges.contains(key)) {
         bool ok;
         const double n = value.toDouble(&ok);
