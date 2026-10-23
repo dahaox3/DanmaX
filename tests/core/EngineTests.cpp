@@ -51,7 +51,12 @@ int main() {
     engine.configure(o, 800, 40);
     engine.load({{0, Mode::Scroll, "a", 0}, {0, Mode::Scroll, "b", 0}, {0, Mode::Scroll, "c", 0}});
     engine.tick(0, 0, true, width);
-    check(engine.activeCount() == 2 && engine.dropped() == 1, "Pool bound and dropped statistics");
+    check(engine.activeCount() == 1 && engine.dropped() == 2, "Scrolling comments never overlap within a full lane");
+    o.maxTracks = 3;
+    engine.configure(o, 800, 120);
+    engine.load({{0, Mode::Scroll, "a", 0}, {0, Mode::Scroll, "b", 0}, {0, Mode::Scroll, "c", 0}});
+    engine.tick(0, 0, true, width);
+    check(engine.activeCount() == 2 && engine.dropped() == 1, "Pool bound still applies with available lanes");
     engine.tick(10, 0, true, width);
     check(engine.activeCount() == 0, "Large jump clears active comments");
     engine.load({{std::numeric_limits<double>::quiet_NaN(), Mode::Scroll, "bad", 0},
@@ -110,7 +115,7 @@ int main() {
         engine.load({{0, Mode::Scroll, "scroll", 0}, {0, Mode::Top, "top", 0},
                      {0, Mode::Bottom, "bottom", 0}});
         engine.tick(0, 0, true, width);
-        check(engine.activeCount() == 3 && engine.activeSlots()[engine.activeIndices()[1]].y == 40 &&
+        check(engine.activeCount() == 3 && engine.activeSlots()[engine.activeIndices()[1]].y == (overlap ? 0 : 40) &&
                   engine.activeSlots()[engine.activeIndices()[1]].x == 350 &&
                   engine.activeSlots()[engine.activeIndices()[2]].y == 160 &&
                   engine.activeSlots()[engine.activeIndices()[2]].x == 350,
@@ -119,14 +124,13 @@ int main() {
                      {0, Mode::Top, "three", 0}, {0, Mode::Top, "four", 0},
                      {0, Mode::Top, "overflow", 0}});
         engine.tick(0, 0, true, width);
-        check(engine.activeCount() == (overlap ? 5u : 4u) && engine.dropped() == (overlap ? 0u : 1u),
-              "Overlap setting controls full-lane fallback without dropping when enabled");
-        if (overlap) {
-            engine.seek(0);
-            engine.tick(0, 0, true, width);
-            check(engine.activeSlots()[engine.activeIndices().back()].y == 0,
-                  "Seek also resets overlap fallback allocation");
-        }
+        check(engine.activeCount() == 4 && engine.dropped() == 1,
+              "Fixed subtitles never overlap when all lanes are occupied");
+        engine.seek(0);
+        engine.tick(0, 0, true, width);
+        check(engine.activeCount() == 4 && engine.activeSlots()[engine.activeIndices().front()].y == 0 &&
+                  engine.activeSlots()[engine.activeIndices().back()].y == 120,
+              "Seek restarts fixed subtitles from the top without class-internal overlap");
     }
     o.overlap = false;
     o.maxTracks = 4;
@@ -193,8 +197,8 @@ int main() {
             if (std::abs(a.y - (lanes - 1) * laneHeight) < 1e-8) ++last;
         }
         check(last > 0, "Fractional and exact lane heights include the final scrolling lane");
-        check(engine.activeCount() == (overlap ? 600 : static_cast<std::size_t>(lanes)),
-              "Overlap and safe admission agree on the number of scrolling lanes");
+        check(engine.activeCount() == static_cast<std::size_t>(lanes),
+              "Scrolling lanes remain collision-free with either overlap setting");
     }
     o = {}; o.trackHeight = 40; o.maxTracks = 60;
     engine.configure(o, 800, 30);
@@ -228,5 +232,37 @@ int main() {
     engine.tick(0, 0, true, [](const Item&) { return Engine::Extent(100, 1e100); });
     check(engine.activeCount() == 0 && engine.dropped() == 1,
           "Extremely large finite text heights are rejected before converting lane counts");
+    // Both arrival orders must use independent scrolling/fixed occupancy when enabled.
+    for (const bool overlap : {false, true}) for (const bool fixedFirst : {false, true}) {
+        o = {}; o.trackHeight = 40; o.maxTracks = 1; o.overlap = overlap;
+        engine.configure(o, 800, 60);
+        const Item scroll{0, Mode::Scroll, "scroll"};
+        const Item top{0, Mode::Top, "top"};
+        engine.load(fixedFirst ? std::vector<Item>{top, scroll} : std::vector<Item>{scroll, top});
+        engine.tick(0, 0, true, width);
+        check(engine.activeCount() == (overlap ? 2u : 1u),
+              "Cross-class overlap is symmetric and obeys the setting");
+        for (auto slot : engine.activeIndices()) check(engine.activeSlots()[slot].y == 0,
+              "Both classes start at the first lane when sharing space is permitted");
+        engine.load({{0, Mode::Top, "top"}, {0, Mode::Bottom, "bottom"}});
+        engine.tick(0, 0, true, width);
+        check(engine.activeCount() == 1 && engine.dropped() == 1,
+              "Top and bottom subtitles still avoid partial collisions with overlap enabled");
+    }
+    o = {}; o.trackHeight = 40; o.maxTracks = 4; o.overlap = true; o.fixedSeconds = 0.5;
+    engine.configure(o, 800, 160);
+    engine.load({{0, Mode::Scroll, "large"}, {0, Mode::Top, "large"},
+                 {0, Mode::Top, "normal"}, {0, Mode::Bottom, "normal"},
+                 {0.6, Mode::Top, "replacement"}});
+    engine.tick(0, 0, true, sized);
+    check(engine.activeCount() == 4 && engine.activeSlots()[engine.activeIndices()[1]].y == 0 &&
+              engine.activeSlots()[engine.activeIndices()[2]].y == 80 &&
+              engine.activeSlots()[engine.activeIndices()[3]].y == 120,
+          "Mixed font sizes reserve full fixed rectangles independently of scrolling lanes");
+    engine.tick(0, 10, false, sized);
+    check(engine.activeCount() == 4, "Pause preserves both classes and fixed occupancy");
+    engine.tick(0.6, 0.6, true, sized);
+    check(engine.activeCount() == 2 && engine.activeSlots()[engine.activeIndices().back()].y == 0,
+          "Expired fixed subtitles release the top lane even while a scroll remains there");
     return failures ? 1 : 0;
 }

@@ -125,9 +125,11 @@ int main() {
 
     o.overlap = true;
     engine.configure(o, 800, 80);
-    engine.load({{0, Mode::Scroll, "a"}, {0, Mode::Scroll, "b"}, {0, Mode::Scroll, "c"}});
+    engine.load({{0, Mode::Scroll, "a"}, {0, Mode::Top, "b"}, {0, Mode::Scroll, "c"}});
     engine.tick(0, 0, true, extent);
     before = snapshots(engine);
+    check(before.size() == 3 && before[1].y == 0 && before[2].y == 40,
+          "Cross-class overlap allows fixed text at the top while scrolls avoid each other");
     o.overlap = false;
     engine.reconfigure(o, 800, 80);
     after = snapshots(engine);
@@ -145,6 +147,25 @@ int main() {
         return Engine::Extent(std::numeric_limits<double>::quiet_NaN(), 40);
     });
     check(engine.activeCount() == 0, "Invalid remeasurement cannot corrupt occupancy");
+
+    o = {}; o.trackHeight = 40; o.maxTracks = 2;
+    engine.configure(o, 800, 80);
+    engine.load({{0, Mode::Scroll, "scroll"}, {0, Mode::Top, "top"}});
+    engine.tick(0, 0, true, extent);
+    before = snapshots(engine);
+    check(before.size() == 2 && before[1].y == 40, "Disabled overlap avoids the occupied scrolling lane");
+    o.overlap = true;
+    engine.reconfigure(o, 800, 80);
+    after = snapshots(engine);
+    check(after.size() == 2 && after[1].id == before[1].id && after[1].y == 0 &&
+              after[0].x == before[0].x && after[1].remaining == before[1].remaining,
+          "Enabling overlap immediately restores the fixed top anchor without restarting comments");
+    o.maxTracks = 1;
+    engine.reconfigure(o, 800, 40);
+    check(engine.activeCount() == 2, "Resize preserves allowed cross-class overlap");
+    engine.reconfigure(o, 800, 40, [](const Item&) { return Engine::Extent(100, 60); });
+    check(engine.activeCount() == 0 && engine.retiredBySettings() == 2,
+          "Overlap never rescues comments whose full geometry cannot fit during reflow");
 
     o = {}; o.trackHeight = 40; o.maxTracks = 6; o.speed = 100;
     engine.configure(o, 800, 400);
@@ -193,12 +214,13 @@ int main() {
             check(seen[a.item] == 0 || seen[a.item] == a.id, "Stress never replays an already presented source record");
             seen[a.item] = a.id;
         }
-        if (!o.overlap) for (std::size_t i = 0; i < live.size(); ++i) for (std::size_t j = i + 1; j < live.size(); ++j) {
+        for (std::size_t i = 0; i < live.size(); ++i) for (std::size_t j = i + 1; j < live.size(); ++j) {
             const auto& a = live[i]; const auto& b = live[j];
+            if (o.overlap && (a.mode == Mode::Scroll) != (b.mode == Mode::Scroll)) continue;
             const bool vertical = a.y + a.height > b.y && b.y + b.height > a.y;
             const bool safe = a.mode == Mode::Scroll && b.mode == Mode::Scroll &&
                               (a.x + a.width + 16 <= b.x || b.x + b.width + 16 <= a.x);
-            check(!vertical || safe, "Stress maintains cross-mode avoidance and scrolling gaps after live edits");
+            check(!vertical || safe, "Stress maintains class-internal avoidance and obeys cross-class overlap settings");
         }
     }
     return failures ? 1 : 0;

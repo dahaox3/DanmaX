@@ -48,7 +48,7 @@ const QList<Setting>& schema() {
         {"Danmaku", "lineSpacing", 0.2,
          "轨道额外行距比例，范围：0～2，默认：0.2（20%）。\n该值是比例，不是像素数；值越大，同样高度内的可用轨道越少。"},
         {"Danmaku", "overlap", false,
-         "轨道已满时是否允许重叠：true=允许，false=禁止，默认：false。\n无论是否开启都优先使用安全轨道；禁止重叠且无可用位置时丢弃新弹幕。"},
+         "是否允许滚动弹幕与固定字幕重叠：true=允许，false=禁止，默认：false。\n同类始终避让，顶部与底部固定字幕也互相避让；无可用位置时丢弃新弹幕。"},
         {"Danmaku", "chineseConversion", "off",
          "弹幕简繁转换：off=保持原样，simplified=转为简体中文，traditional=转为繁体中文。默认：off。\n修改后即时对当前与后续弹幕生效。"},
         {"Rendering", "textureBudgetAuto", true,

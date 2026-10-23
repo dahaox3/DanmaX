@@ -135,15 +135,21 @@ class RendererTests : public QObject {
         QVERIFY(renderer.imageBackend());
         danmaku::Options options;
         options.maxActive = 100;
-        options.maxTracks = 40;
+        options.maxTracks = 100;
+        options.trackHeight = renderer.trackHeight();
         options.overlap = true;
         options.fixedSeconds = 30;
         danmaku::Engine engine;
-        engine.configure(options, window.width(), window.height());
+        // A virtual tall viewport supplies collision-free text for cache pressure.
+        // The actual window clips the extra rows; production overlap is cross-class only.
+        engine.configure(options, window.width(), 100 * options.trackHeight);
         std::vector<danmaku::Item> items;
+        const qreal dpr = window.effectiveDevicePixelRatio();
+        // Keep raster area comparable across DPI settings and below the per-texture cap.
+        const int warmupGlyphs = std::max(1, qRound(20 / (dpr * dpr)));
         for (int i = 0; i < 100; ++i)
             items.push_back({0, danmaku::Mode::Top,
-                (QString(40, QChar(0x5f39)) + QString::number(i)).toUtf8().toStdString(), 0xffffff});
+                (QString(warmupGlyphs, QChar(0x5f39)) + QString::number(i)).toUtf8().toStdString(), 0xffffff});
         engine.load(std::move(items));
         engine.tick(0, 0, true, [&](const auto& item) { return renderer.measure(item); });
         renderer.present(engine);
@@ -174,7 +180,8 @@ class RendererTests : public QObject {
         settings["strokeWidth"] = 3;
         settings["fontSize"] = 64;
         renderer.configure(settings);
-        engine.reconfigure(options, window.width(), window.height(),
+        options.trackHeight = renderer.trackHeight();
+        engine.reconfigure(options, window.width(), 100 * options.trackHeight,
                            [&](const auto& item) { return renderer.measure(item); });
         renderer.present(engine);
         QTest::qWait(100);
@@ -184,16 +191,21 @@ class RendererTests : public QObject {
         // Saturate the real cache cap with unique live textures; excess entries stay as text.
         settings["strokeWidth"] = 0;
         renderer.configure(settings);
-        options.maxActive = 400;
-        engine.configure(options, window.width(), window.height());
+        // Change membership so QTRY_COMPARE waits for this snapshot, rather than
+        // accepting the preceding workload's still-published scene count.
+        constexpr int pressureComments = 96;
+        options.maxActive = pressureComments;
+        options.trackHeight = renderer.trackHeight();
+        engine.configure(options, window.width(), 100 * options.trackHeight);
         items.clear();
-        for (int i = 0; i < 400; ++i)
+        const int pressureGlyphs = std::max(1, qRound(45 / (dpr * dpr)));
+        for (int i = 0; i < pressureComments; ++i)
             items.push_back({0, danmaku::Mode::Top,
-                (QString(40, QChar(0x5f39)) + QString::number(i)).toUtf8().toStdString(), 0xffffff});
+                (QString(pressureGlyphs, QChar(0x5f39)) + QString::number(i)).toUtf8().toStdString(), 0xffffff});
         engine.load(std::move(items));
         engine.tick(0, 0, true, [&](const auto& item) { return renderer.measure(item); });
         renderer.present(engine);
-        QTRY_COMPARE(renderer.sceneEntries(), 400);
+        QTRY_COMPARE(renderer.sceneEntries(), pressureComments);
         warmup.restart();
         const auto initialBytes = renderer.textureBytes();
         while (((native && (renderer.textureBytes() < 60 * 1024 * 1024 ||
@@ -219,7 +231,7 @@ class RendererTests : public QObject {
         QCOMPARE(renderer.firstSnapshotId(), currentId);
         QCOMPARE(renderer.firstSnapshotX(), currentX);
         QCOMPARE(renderer.cacheMisses(), currentLayouts);
-        QCOMPARE(renderer.sceneEntries(), 400);
+        QCOMPARE(renderer.sceneEntries(), pressureComments);
         settings["textureBudgetAuto"] = true;
         settings["textureBudgetMiB"] = 128;
         renderer.configure(settings);

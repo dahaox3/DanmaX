@@ -16,7 +16,7 @@ struct Item {
 struct Options {
     double speed{180}, fixedSeconds{5}, trackHeight{36};
     int maxTracks{18}, maxActive{500};
-    bool overlap{};
+    bool overlap{}; // Allow scrolling vs. fixed overlap; always avoid collisions within each class.
 };
 struct Active {
     bool alive{};
@@ -80,7 +80,7 @@ class Engine {
     Options options_;
     double width_{1920}, height_{1080}, position_{}, lastPosition_{};
     bool initialized_{};
-    std::size_t cursor_{}, activeCount_{}, overlapTrack_{};
+    std::size_t cursor_{}, activeCount_{};
     std::uint64_t sequence_{}, dropped_{}, retiredBySettings_{}, suppressedWhileHidden_{};
 };
 } // namespace danmaku
