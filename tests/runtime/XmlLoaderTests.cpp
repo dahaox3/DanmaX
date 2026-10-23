@@ -45,6 +45,24 @@ class XmlLoaderTests : public QObject {
         QCOMPARE(result.items[4].fontSize, 36);
     }
 
+    void fractionalFontSizes() {
+        QByteArray xml("<i>");
+        for (const auto& size : {"24.0", "24.4", "24.5", "24.6", "18.5", "36.5", "1.0", "199.9", "200.0"})
+            xml += QByteArray("<d p=\"0,1,") + size + ",16777215\">valid</d>";
+        for (const auto& size : {"", "text", "nan", "inf", "-inf", "1e100", "-1.5", "0.9", "200.1"})
+            xml += QByteArray("<d p=\"0,1,") + size + ",16777215\">invalid</d>";
+        xml += "<d p=\"0,5,24.5,0\">top</d><d p=\"0,4,24.4,0\">bottom</d></i>";
+        const auto result = readDanmakuXml(write(xml));
+        QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+        const std::vector<int> expected{24, 24, 25, 25, 19, 37, 1, 200, 200, 25, 24};
+        QCOMPARE(result.items.size(), expected.size());
+        for (std::size_t i = 0; i < expected.size(); ++i) QCOMPARE(result.items[i].fontSize, expected[i]);
+        QCOMPARE(result.items[9].mode, danmaku::Mode::Top);
+        QCOMPARE(result.items[10].mode, danmaku::Mode::Bottom);
+        QCOMPARE(result.invalidRecords, 9);
+        QCOMPARE(result.skipped, 9);
+    }
+
     void forbiddenControlsAndChunkBoundaries() {
         QByteArray xml("<i><!--");
         // Put U+0016 at the end of a device chunk, before a multibyte UTF-8 text.

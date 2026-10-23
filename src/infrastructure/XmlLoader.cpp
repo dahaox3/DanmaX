@@ -131,7 +131,7 @@ XmlResult readDanmakuXml(const QString& path, std::stop_token stop,
         bool timeOk = false, modeOk = false, sizeOk = false, colorOk = false;
         const double time = fields.value(0).toDouble(&timeOk);
         const int mode = fields.value(1).toInt(&modeOk);
-        const int fontSize = fields.value(2).toInt(&sizeOk);
+        const double sourceFontSize = fields.value(2).toDouble(&sizeOk);
         const auto colorField = fields.value(3).trimmed();
         const bool missingColor = fields.size() >= 4 &&
             (colorField.isEmpty() || colorField.compare("undefined", Qt::CaseInsensitive) == 0 ||
@@ -142,7 +142,7 @@ XmlResult readDanmakuXml(const QString& path, std::stop_token stop,
             colorOk = true;
         }
         if (!timeOk || !std::isfinite(time) || time < 0 || time > 604800 || !modeOk ||
-            !sizeOk || fontSize < 1 || fontSize > 200 ||
+            !sizeOk || !std::isfinite(sourceFontSize) || sourceFontSize < 1 || sourceFontSize > 200 ||
             !colorOk || color > 0xffffff || text.isEmpty() ||
             text.size() > 512) {
             ++result.skipped;
@@ -159,6 +159,7 @@ XmlResult readDanmakuXml(const QString& path, std::stop_token stop,
         text.replace('\n', ' ');
         text.replace('\r', ' ');
         const auto mappedMode = mode <= 3 ? danmaku::Mode::Scroll : static_cast<danmaku::Mode>(mode);
+        const int fontSize = static_cast<int>(std::round(sourceFontSize));
         if (missingColor) ++result.defaultedColors;
         result.items.push_back({time, mappedMode, text.toUtf8().toStdString(),
                                 static_cast<std::uint32_t>(color), fontSize});

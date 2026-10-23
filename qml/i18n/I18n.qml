@@ -236,7 +236,7 @@ QtObject {
         lineSpacingTitle: "轨道额外行距（%）",
         lineSpacingAccessible: "轨道额外行距",
         overlapTitle: "允许弹幕重叠",
-        overlapDesc: "优先使用空闲轨道；轨道满时，开启则允许重叠，关闭则丢弃新弹幕。",
+        overlapDesc: "仅允许滚动弹幕与固定字幕重叠；同类始终避让，轨道满时丢弃新弹幕。",
         overlapAccessible: "允许弹幕重叠",
 
         // 同步与窗口

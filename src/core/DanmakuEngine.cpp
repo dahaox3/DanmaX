@@ -56,7 +56,7 @@ void Engine::reconfigure(Options options, double width, double height, const Mea
     const auto oldHeight = height_;
     const bool reflow = measure || options.trackHeight != options_.trackHeight ||
                         options.maxTracks != options_.maxTracks || width != width_ || height != height_ ||
-                        (options_.overlap && !options.overlap);
+                        options_.overlap != options.overlap;
     options_ = options;
     width_ = std::max(width, 1.0);
     height_ = std::max(height, 1.0);
@@ -103,12 +103,9 @@ void Engine::reconfigure(Options options, double width, double height, const Mea
                 a.y = laneY(a.mode, candidateLane, a.height);
                 return fits(a);
             };
-            keep = place(lane);
+            // Enabling cross-class overlap frees the fixed comments' edge lanes.
+            keep = place(options_.overlap && !oldOptions.overlap && a.mode != Mode::Scroll ? 0 : lane);
             for (int attempt = 0; !keep && attempt < fitting; ++attempt) keep = place(attempt);
-            if (!keep && options_.overlap && fitting > 0) {
-                a.y = laneY(a.mode, std::clamp(lane, 0, fitting - 1), a.height);
-                keep = true;
-            }
         }
         if (keep && a.mode == Mode::Scroll && a.x + a.width < 0) keep = false;
         if (keep) {
@@ -128,7 +125,6 @@ void Engine::reconfigure(Options options, double width, double height, const Mea
 }
 void Engine::clear() {
     activeCount_ = 0;
-    overlapTrack_ = 0;
     active_.clear();
     for (auto& bucket : occupancy_) bucket.clear();
     free_.clear();
@@ -146,7 +142,7 @@ void Engine::unload() {
     std::vector<std::vector<std::size_t>>().swap(occupancy_);
     position_ = lastPosition_ = 0;
     initialized_ = false;
-    cursor_ = activeCount_ = overlapTrack_ = 0;
+    cursor_ = activeCount_ = 0;
     dropped_ = retiredBySettings_ = suppressedWhileHidden_ = 0;
 }
 void Engine::updateItemTexts(const std::vector<std::string>& texts) {
@@ -224,6 +220,10 @@ bool Engine::fits(const Active& candidate) const {
     for (auto bucket = first; bucket < last && bucket < occupancy_.size(); ++bucket) {
         for (auto slot : occupancy_[bucket]) {
             const auto& other = slots_[slot];
+            // Only scrolling vs. fixed comments may share space. Top and bottom
+            // comments belong to the same fixed class and must still avoid each other.
+            if (options_.overlap && (candidate.mode == Mode::Scroll) != (other.mode == Mode::Scroll))
+                continue;
             // Adjacent fractional lanes can overlap by floating-point noise only.
             if (other.y + other.height <= candidate.y + 1e-7 ||
                 candidate.y + candidate.height <= other.y + 1e-7) continue;
@@ -256,10 +256,6 @@ bool Engine::spawn(std::size_t index, Extent extent) {
         selected = lane;
         break;
     }
-    // Overlap is a fallback after checking safe lanes. Cycling every arrival
-    // through the screen produces diagonal staircases even at low density.
-    if (selected < 0 && options_.overlap && fitting > 0)
-        selected = static_cast<int>(overlapTrack_++ % static_cast<std::size_t>(fitting));
     if (selected >= 0) {
         const double y = laneY(mode, selected, height);
         const auto slot = free_.back();
