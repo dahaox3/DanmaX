@@ -31,7 +31,7 @@ class FrameRateTests final : public QObject {
         }
         void start(int fps) {
             settings->setValue("maxFps", fps);
-            qobject_cast<NowPlayingModel*>(app.nowPlaying())->openStandalone(xml);
+            qobject_cast<NowPlayingModel*>(app.nowPlaying())->openDanmaku(xml);
         }
     };
   private slots:
@@ -132,7 +132,7 @@ class FrameRateTests final : public QObject {
     void mediaSamplesCannotBypassCap() {
         Fixture f;
         QVERIFY(f.settings->setValue("maxFps", 10));
-        f.app.setRenderTestSession("FrameRate.Player");
+        f.app.selectSession("FrameRate.Player");
         auto* monitor = f.app.findChild<MediaMonitor*>(); QVERIFY(monitor);
         QObject::disconnect(monitor, &MediaMonitor::sampleReceived, &f.app, nullptr);
         f.app.loadFile(f.xml);

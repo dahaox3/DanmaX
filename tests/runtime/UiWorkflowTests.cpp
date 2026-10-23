@@ -250,6 +250,43 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void legacyMpvSessionChoice() {
+        QTemporaryDir directory;
+        AppController backend(directory.path());
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
+        settings->setDanmakuServers({});
+        settings->setValue("micaEnabled", false);
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        auto* monitor = backend.findChild<MediaMonitor*>(); QVERIFY(monitor);
+        monitor->sessionsChanged({QVariantMap{{"id", "mpv.exe"}, {"label", "mpv · test video"}}});
+        QObject::disconnect(monitor, nullptr, &backend, nullptr);
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}, {"selectedPage", 1}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* page = window->findChild<QQuickItem*>("playerPage"); QVERIFY(page);
+        auto* combo = window->findChild<QQuickItem*>("targetSessionChoice"); QVERIFY(combo);
+        QVERIFY(QMetaObject::invokeMethod(page, "openOptions", Q_ARG(QVariant, true)));
+        QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(combo))));
+        QTRY_COMPARE(combo->property("count").toInt(), 1);
+        QTest::qWait(200); // Let the disclosure and deferred reveal finish before keyboard input.
+        QVERIFY(combo->isVisible() && combo->isEnabled());
+        combo->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4);
+        auto* popup = combo->property("popup").value<QObject*>(); QVERIFY(popup);
+        QTRY_VERIFY(popup->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_Home); QTest::keyClick(window, Qt::Key_Return);
+        QTRY_COMPARE(settings->values().value("targetSession").toString(), QString("mpv.exe"));
+        QVERIFY(combo->property("displayText").toString().contains("mpv"));
+        const auto capture = qEnvironmentVariable("DANMAKU_LEGACY_MPV_CAPTURE");
+        if (!capture.isEmpty()) { QTest::qWait(100); QVERIFY(window->grabWindow().save(capture)); }
+        settings->flushPending();
+        SettingsStore restored(directory.path());
+        QCOMPARE(restored.values().value("targetSession").toString(), QString("mpv.exe"));
+        QCOMPARE(warnings.count(), 0);
+    }
     void frameRateSettingKeyboardAndPersistence() {
         QTemporaryDir directory;
         AppController backend(directory.filePath("data"), nullptr, {}, directory.filePath("cache"));
