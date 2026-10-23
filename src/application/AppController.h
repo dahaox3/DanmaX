@@ -206,6 +206,8 @@ class AppController final : public QObject {
     void unloadDanmaku();
     QString boundSession() const;
     void tick();
+    qint64 frameDelayNs() const;
+    void requestNextFrame();
     void configure();
     void applyRendererSettings();
     void discardLoad();
@@ -253,7 +255,8 @@ class AppController final : public QObject {
     ToolbarInputFilter toolbarInputFilter_;
     ToolbarPointerMonitor toolbarPointer_;
     WindowLayerController windowLayers_;
-    QTimer timer_, metricsTimer_, disconnectCleanup_;
+    QTimer timer_, metricsTimer_, disconnectCleanup_, frameRequestTimer_;
+    QElapsedTimer animationFrameTime_;
     QElapsedTimer frameTime_, sampleTime_, foregroundTime_, metricsTime_;
     std::jthread loader_;
     std::shared_ptr<XmlResult> pendingLoad_;

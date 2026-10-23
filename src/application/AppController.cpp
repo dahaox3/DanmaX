@@ -102,6 +102,9 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     timer_.setTimerType(Qt::PreciseTimer);
     monotonicTime_.start();
     timer_.setInterval(33);
+    frameRequestTimer_.setSingleShot(true);
+    frameRequestTimer_.setTimerType(Qt::PreciseTimer);
+    connect(&frameRequestTimer_, &QTimer::timeout, this, &AppController::requestNextFrame);
     disconnectCleanup_.setSingleShot(true);
     disconnectCleanup_.setInterval(1500);
     connect(&disconnectCleanup_, &QTimer::timeout, this, &AppController::clearDisconnectedContent);
@@ -113,10 +116,9 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
             ++maintenanceTicks_;
             tick();
         } else if (frameTime_.isValid() && frameTime_.elapsed() > 100) {
-            // Recovery after exposure/device scheduling changes: request a frame,
-            // never advance a second animation clock from this timer.
-            if (auto* quick = qobject_cast<QQuickWindow*>(overlay_.data()))
-                quick->update();
+            // Recovery uses the same paced request as presentation; a pending
+            // capped frame must not be bypassed by the maintenance timer.
+            requestNextFrame();
         }
     });
     metricsTimer_.setInterval(1000);
@@ -207,6 +209,8 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
     connect(overlay_, &QWindow::widthChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::heightChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::visibleChanged, this, [this](bool shown) {
+        frameRequestTimer_.stop();
+        animationFrameTime_.invalidate();
         windowLayers_.reconcile(settings_.values()["onTop"].toBool(), panelForeground_, desiredOverlayAllowed_);
         toolbarPointer_.setEnabled(toolbarAllowed_ && shown);
         snapshotDirty_ = true;
@@ -219,17 +223,23 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
         connect(quick, &QQuickWindow::afterAnimating, this, [this, quick] {
             ++animationCallbacks_;
             if (running_ && visible_ && quick->isVisible() && quick->isExposed() && (playing_ || snapshotDirty_)) {
+                if (playing_ && settings_.values().value("maxFps").toInt() > 0 &&
+                    animationFrameTime_.isValid()) {
+                    // Capped frames prepare their snapshot before requesting a
+                    // render. Do not publish it again during afterAnimating.
+                    return;
+                }
+                animationFrameTime_.start();
                 if (playing_) ++frameTicks_;
                 tick();
             }
         });
         connect(
-            quick, &QQuickWindow::frameSwapped, this, [this, quick] {
+            quick, &QQuickWindow::frameSwapped, this, [this] {
                 ++renderedFrames_;
                 // Item::update during afterAnimating can be consumed by the current
                 // sync. Request the NEXT frame after presentation, on the GUI thread.
-                if (running_ && playing_ && visible_ && quick->isExposed())
-                    quick->update();
+                requestNextFrame();
             }, Qt::QueuedConnection);
     }
     configure();
@@ -247,6 +257,10 @@ void AppController::clearError() {
 }
 void AppController::configure() {
     const auto s = settings_.values();
+    if (lastSettings_.value("maxFps") != s["maxFps"]) {
+        frameRequestTimer_.stop();
+        requestNextFrame();
+    }
     media_.configure(s["danmakuServers"].toStringList());
     danmaku_.configure(s["danmakuServers"].toStringList());
     metadata_.setShowChineseAnime(s["homeShowChineseAnime"].toBool());
@@ -594,6 +608,8 @@ void AppController::resetPlayback(bool unloadSource) {
     disconnectCleanup_.stop();
     disconnectedContentCleared_ = false;
     timer_.stop();
+    frameRequestTimer_.stop();
+    animationFrameTime_.invalidate();
     running_ = playing_ = visible_ = demo_ = false;
     toolbarAllowed_ = desiredOverlayAllowed_ = false;
     windowLayers_.reconcile(settings_.values()["onTop"].toBool(), false, false);
@@ -676,6 +692,8 @@ void AppController::setRenderTestSession(const QString& id) {
     }
 }
 void AppController::setPlaybackState(PlaybackState state) {
+    if (state == Playing && playbackState_ != Playing) animationFrameTime_.invalidate();
+    if (!playing_) frameRequestTimer_.stop();
     playbackState_ = state;
     switch (state) {
     case Empty: status_ = QStringLiteral("请选择弹幕文件"); break;
@@ -778,12 +796,40 @@ void AppController::onSample(const MediaSample& s) {
     playing_ = samplePlaying;
     syncConnected_ = true;
     if (reset) resetDanmakuTimeline();
-    if (playing_ && renderer_) renderer_->update();
     sampleTime_.start();
     setPlaybackState(stopped ? PlayerStopped : playing_ ? Playing : Paused);
     updatePresentationVisibility(true, false);
+    if (playing_) requestNextFrame();
     emit stateChanged();
     emit metricsChanged();
+}
+qint64 AppController::frameDelayNs() const {
+    const int fps = settings_.values().value("maxFps").toInt();
+    if (fps == 0 || !animationFrameTime_.isValid()) return 0;
+    const qint64 interval = (1000000000LL + fps - 1) / fps;
+    return std::max<qint64>(0, interval - animationFrameTime_.nsecsElapsed());
+}
+void AppController::requestNextFrame() {
+    auto* quick = qobject_cast<QQuickWindow*>(overlay_.data());
+    if (!running_ || !playing_ || !visible_ || !quick || !quick->isVisible() || !quick->isExposed()) {
+        frameRequestTimer_.stop();
+        return;
+    }
+    const auto delay = frameDelayNs();
+    if (delay > 0) {
+        if (!frameRequestTimer_.isActive())
+            frameRequestTimer_.start(static_cast<int>((delay + 999999) / 1000000));
+    } else {
+        frameRequestTimer_.stop();
+        if (settings_.values().value("maxFps").toInt() > 0) {
+            // Publish before Qt begins this frame, so Item::update does not
+            // enqueue an extra frame from inside afterAnimating. The capped
+            // and uncapped drivers are mutually exclusive and share tick().
+            animationFrameTime_.start();
+            ++frameTicks_;
+            tick();
+        } else quick->update();
+    }
 }
 void AppController::tick() {
     if (!running_ || !renderer_)
@@ -858,6 +904,7 @@ void AppController::tick() {
 void AppController::updateMetrics() {
     metrics_ = MediaMonitor::processMetrics();
     metrics_["active"] = static_cast<int>(engine_.activeCount());
+    metrics_["maxFps"] = settings_.values().value("maxFps").toInt();
     metrics_["dropped"] = static_cast<qulonglong>(engine_.dropped());
     metrics_["retiredBySettings"] = static_cast<qulonglong>(engine_.retiredBySettings());
     metrics_["suppressedWhileHidden"] = static_cast<qulonglong>(engine_.suppressedWhileHidden());

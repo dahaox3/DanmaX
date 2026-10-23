@@ -264,5 +264,16 @@ int main() {
     engine.tick(0.6, 0.6, true, sized);
     check(engine.activeCount() == 2 && engine.activeSlots()[engine.activeIndices().back()].y == 0,
           "Expired fixed subtitles release the top lane even while a scroll remains there");
+    o = {}; o.trackHeight = 40; o.maxTracks = 6;
+    engine.configure(o, 800, 400);
+    engine.load({{0, Mode::Scroll, "first"}, {0.1, Mode::Top, "early"},
+                 {0.2, Mode::Bottom, "middle"}, {0.9, Mode::Scroll, "late"}});
+    engine.tick(0, 0, true, width);
+    engine.tick(1, 1, true, width);
+    check(engine.activeCount() == 4 && engine.dropped() == 0,
+          "A one-FPS tick admits all comments due since the previous frame");
+    engine.seek(1);
+    engine.tick(1, 0, true, width);
+    check(engine.activeCount() == 0, "Low-FPS admission does not replay comments before a seek");
     return failures ? 1 : 0;
 }
