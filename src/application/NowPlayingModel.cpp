@@ -39,7 +39,7 @@ NowPlayingModel::NowPlayingModel(AppController* app) : QObject(app), app_(app) {
     });
 }
 bool NowPlayingModel::video() const { return app_->coordinator_.owner() == PlaybackCoordinator::Media; }
-bool NowPlayingModel::external() const { return video() || (app_->coordinator_.owner() == PlaybackCoordinator::Danmaku && !app_->manual_); }
+bool NowPlayingModel::external() const { return video() || app_->coordinator_.owner() == PlaybackCoordinator::External || (app_->coordinator_.owner() == PlaybackCoordinator::Danmaku && !app_->manual_); }
 bool NowPlayingModel::fresh() const {
     const double age = MediaMonitor::monotonicSeconds() - sample_.observedAt;
     return external() && (!video() || (app_->media_.active_ && app_->media_.confirmed_ && app_->media_.sameContent(sample_)))
@@ -63,7 +63,7 @@ bool NowPlayingModel::canSeek() const {
     if (busy() || duration() <= 0) return false;
     return external() ? fresh() && sample_.canSeek && sample_.id.startsWith("danmax-vlc:") : active() && app_->manual_;
 }
-QVariantMap NowPlayingModel::metadata() const { return video() ? app_->media_.contentMetadata_ : app_->danmaku_.metadata_; }
+QVariantMap NowPlayingModel::metadata() const { return app_->coordinator_.owner() == PlaybackCoordinator::External ? app_->external_.metadata() : video() ? app_->media_.contentMetadata_ : app_->danmaku_.metadata_; }
 bool NowPlayingModel::canSelectEpisode() const { return !video() && !metadata().value("animeTitle").toString().isEmpty(); }
 QString NowPlayingModel::title() const {
     const auto meta = metadata();
@@ -84,6 +84,7 @@ QString NowPlayingModel::source() const {
     return !server.isEmpty() ? server : QFileInfo(title).isAbsolute() ? QFileInfo(title).fileName() : title;
 }
 QString NowPlayingModel::status() const {
+    if (app_->coordinator_.owner() == PlaybackCoordinator::External) return app_->external_.status();
     if (pending_) return desiredPosition_ >= 0 ? QStringLiteral("正在确认定位…") : QStringLiteral("正在确认播放状态…");
     if (!video() && app_->coordinator_.owner() == PlaybackCoordinator::Danmaku && app_->danmaku_.total() == 0 && app_->automatic_.enabled())
         return app_->automatic_.status();
@@ -184,9 +185,10 @@ void NowPlayingModel::replaceDanmaku(const QString& path) {
     }
     emit changed();
 }
-void NowPlayingModel::unloadDanmaku() { pendingLoad_ = 0; pendingEpisode_ = false; if (video()) app_->media_.unload(); else app_->unloadDanmaku(); }
-void NowPlayingModel::searchDanmaku() { pendingLoad_ = 0; error_.clear(); if (video()) app_->media_.searchDanmaku(); else app_->showOnlineDanmakuForAnime({}); }
+void NowPlayingModel::unloadDanmaku() { pendingLoad_ = 0; pendingEpisode_ = false; if (app_->coordinator_.owner() == PlaybackCoordinator::External) app_->external_.stop(); else if (video()) app_->media_.unload(); else app_->unloadDanmaku(); }
+void NowPlayingModel::searchDanmaku() { pendingLoad_ = 0; error_.clear(); if (app_->coordinator_.owner() == PlaybackCoordinator::External) { app_->external_.chooseSource(); app_->showMainWindow(); } else if (video()) app_->media_.searchDanmaku(); else app_->showOnlineDanmakuForAnime({}); }
 void NowPlayingModel::selectEpisode() {
+    if (app_->coordinator_.owner() == PlaybackCoordinator::External) { searchDanmaku(); return; }
     if (!canSelectEpisode()) return;
     pendingEpisode_ = active(); ownerGeneration_ = app_->coordinator_.generation();
     const auto meta = metadata(); app_->showOnlineDanmakuForAnime(meta.value("animeTitle").toString(), {}, 0);

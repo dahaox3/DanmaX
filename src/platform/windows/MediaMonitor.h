@@ -5,6 +5,7 @@
 #include "infrastructure/MediaPlaybackBackend.h"
 class SmtcBackend;
 class VlcHttpBackend;
+class MpvIpcBackend;
 class MediaMonitor final : public QObject {
     Q_OBJECT
   public:
@@ -16,6 +17,7 @@ class MediaMonitor final : public QObject {
     void requestSeek(MediaSample expected, double seconds, quint64 request);
     ManagedPlaybackOpen openManaged(const QString& adapter, const QString& executable, const QString& video);
     void cancelManagedOpen();
+    MpvIpcBackend* mpv() { return mpv_; }
     static double monotonicSeconds();
     static bool targetForeground(const QString& applicationId);
     static bool windowMatchesSession(quintptr handle, const QString& id);
@@ -33,6 +35,7 @@ class MediaMonitor final : public QObject {
     void publishSessions();
     SmtcBackend* smtc_{};
     VlcHttpBackend* vlc_{};
+    MpvIpcBackend* mpv_{};
     MediaPlaybackBackend* active_{};
     QVariantList smtcSessions_, vlcSessions_;
     QString selected_;

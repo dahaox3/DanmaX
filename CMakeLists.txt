@@ -110,6 +110,10 @@ if(DANMAKU_BUILD_APP)
     include(cmake/Anitomy.cmake)
     danmax_require_anitomy()
     add_library(danmaku_runtime STATIC
+        src/infrastructure/InstanceBroker.cpp src/infrastructure/InstanceBroker.h
+        src/infrastructure/ExternalSessionDescriptor.cpp src/infrastructure/ExternalSessionDescriptor.h
+        src/platform/windows/MpvIpcBackend.cpp src/platform/windows/MpvIpcBackend.h
+        src/application/ExternalPlaybackSession.cpp src/application/ExternalPlaybackSession.h
         src/application/VideoOpenService.cpp src/application/VideoOpenService.h
         src/application/PlaybackCoordinator.h src/application/DanmakuSession.cpp src/application/DanmakuSession.h
         src/application/MediaSession.cpp src/application/MediaSession.h
@@ -179,6 +183,14 @@ if(DANMAKU_BUILD_APP)
     if(BUILD_TESTING)
         find_package(Qt6 6.11.0 EXACT REQUIRED COMPONENTS Test
             PATHS "${danmaku_qt_directory}/lib/cmake/Qt6" NO_DEFAULT_PATH)
+        add_executable(external_playback_tests tests/runtime/ExternalPlaybackTests.cpp)
+        target_link_libraries(external_playback_tests PRIVATE danmaku_runtime Qt6::Test)
+        if(DANMAKU_STATIC_QT)
+            qt_import_plugins(external_playback_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin)
+        endif()
+        danmaku_compile_options(external_playback_tests)
+        add_test(NAME external_playback COMMAND external_playback_tests -o "${CMAKE_BINARY_DIR}/external-playback-tests.txt,txt")
+        set_tests_properties(external_playback PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         add_executable(app_paths_tests tests/runtime/AppPathsTests.cpp src/infrastructure/AppPaths.cpp)
         target_include_directories(app_paths_tests PRIVATE src)
         target_link_libraries(app_paths_tests PRIVATE Qt6::Core Qt6::Test)

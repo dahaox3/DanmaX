@@ -2,6 +2,7 @@
 #include "application/AppController.h"
 #include "platform/windows/WindowBackdropController.h"
 #include "infrastructure/AppPaths.h"
+#include "infrastructure/InstanceBroker.h"
 #include <QWKQuick/qwkquickglobal.h>
 #include "version.h"
 #include <QCommandLineParser>
@@ -106,6 +107,7 @@ int main(int argc, char* argv[]) {
     parser.addOption({"report", "Write benchmark metrics to JSON", "path"});
     parser.addOption({"media-session", "Select a real SMTC session (read only)", "id"});
     parser.addOption({"file", "Load an XML file on startup", "path"});
+    parser.addOption({"external-session", "Attach an Emby-launched mpv session", "path"});
     parser.addOption({"page", "Initial page: home, player, logs, settings, about", "page", "home"});
     parser.addOption({"source-tab", "Initial player source tab: xml, cache (UI validation)", "tab", "xml"});
     parser.addOption({"online-search", "Open online danmaku search on the home page (UI validation)"});
@@ -121,8 +123,32 @@ int main(int argc, char* argv[]) {
             throw std::runtime_error("Unknown player source tab; use --online-search for home search");
         const auto paths =
             AppPaths::prepare(app.applicationFilePath(), parser.value("data-dir"), parser.value("cache-dir"));
+        InstanceBroker broker(paths.data);
+        bool autoOnly = parser.isSet("external-session");
+        const QVariantMap message{{"version", 1}, {"action", autoOnly ? "attach" : "show"},
+                                  {"file", QFileInfo(parser.value("external-session")).absoluteFilePath()}};
+        const bool isolated = parser.isSet("smoke-test") || parser.isSet("benchmark");
+        QString brokerError;
+        if (!isolated && !broker.claim(message, brokerError)) {
+            if (!brokerError.isEmpty()) throw std::runtime_error(brokerError.toStdString());
+            return 0;
+        }
         qmlRegisterType<DanmakuItem>("DanmaX.Native", 1, 0, "DanmakuCanvas");
         AppController controller(paths.data, nullptr, {}, paths.cache);
+        broker.receive = [&](const QVariantMap& request) -> QString {
+            if (request.value("action") == "attach") return controller.openExternalSession(request.value("file").toString());
+            if (request.value("action") == "show") { autoOnly = false; app.setQuitOnLastWindowClosed(true); controller.showMainWindow(); return {}; }
+            return QStringLiteral("不支持的会话操作");
+        };
+        QObject::connect(qobject_cast<ExternalPlaybackSession*>(controller.externalPlayback()), &ExternalPlaybackSession::ended,
+                         &app, [&] {
+            if (parser.isSet("report")) controller.writeReport(parser.value("report"));
+            if (autoOnly) QTimer::singleShot(0, &app, &QCoreApplication::quit);
+        });
+        QObject::connect(qobject_cast<PlaybackCoordinator*>(controller.coordinator()), &PlaybackCoordinator::changed, &app, [&] {
+            const auto owner = qobject_cast<PlaybackCoordinator*>(controller.coordinator())->owner();
+            if (owner == PlaybackCoordinator::Danmaku || owner == PlaybackCoordinator::Media) autoOnly = false;
+        });
         if (parser.isSet("theme"))
             qobject_cast<SettingsStore*>(controller.settings())->setValue("theme", parser.value("theme"));
         if (parser.isSet("media-session"))
@@ -167,11 +193,31 @@ int main(int argc, char* argv[]) {
         auto* mainWindow = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
         if (!mainWindow)
             return 1;
+        QObject::connect(mainWindow, &QQuickWindow::closing, &app,
+                         [&] { QTimer::singleShot(0, &app, &QCoreApplication::quit); });
+        QObject::connect(qobject_cast<ExternalPlaybackSession*>(controller.externalPlayback()), &ExternalPlaybackSession::sourceAccepted,
+                         mainWindow, [&] { if (autoOnly) mainWindow->hide(); });
+        QObject::connect(qobject_cast<ExternalPlaybackSession*>(controller.externalPlayback()), &ExternalPlaybackSession::choiceCancelled,
+                         mainWindow, [&] { if (autoOnly) mainWindow->hide(); });
+        QTimer externalReport;
+        if (parser.isSet("external-session") && parser.isSet("report")) {
+            externalReport.setInterval(500);
+            QObject::connect(&externalReport, &QTimer::timeout, &controller,
+                             [&] { controller.writeReport(parser.value("report")); });
+            externalReport.start();
+        }
         if (parser.isSet("window-width"))
             mainWindow->setWidth(parser.value("window-width").toInt());
         backdrop.attach(mainWindow);
         bool overlayCaptured = false;
-        mainWindow->show();
+        if (!autoOnly) mainWindow->show();
+        else {
+            app.setQuitOnLastWindowClosed(false);
+            QTimer::singleShot(0, &controller, [&] {
+                const auto error = controller.openExternalSession(parser.value("external-session"));
+                if (!error.isEmpty()) { qWarning("External session rejected"); app.exit(2); }
+            });
+        }
         // Validation workloads must satisfy the same foreground policy as normal playback.
         // UI captures restore the panel after the overlay has actually presented a frame.
         if (parser.isSet("smoke-test") || parser.isSet("benchmark")) {

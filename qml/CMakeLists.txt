@@ -17,7 +17,7 @@ qt_add_qml_module(danmaku_app URI DanmaX VERSION 1.0
     components/AppComboBox.qml components/AppMenu.qml components/PopupSurface.qml components/AnimeSearchPane.qml components/AnimeSearchField.qml
     components/SettingsSection.qml components/SettingsRow.qml components/NavigationPane.qml components/FontSelector.qml
     components/ActionCard.qml components/WindowCaptionButtons.qml components/DanmakuToolbar.qml
-    components/OnlineDanmakuPane.qml components/CachedDanmakuPane.qml components/MatchingRecoveryDialog.qml
+    components/OnlineDanmakuPane.qml components/CachedDanmakuPane.qml components/MatchingRecoveryDialog.qml components/ExternalMatchingDialog.qml
     components/AnimeCard.qml components/HeroBanner.qml components/AnimeRail.qml components/AnimeDetailDialog.qml components/CachedCoverImage.qml
     pages/HomePage.qml pages/PlayerPage.qml pages/MediaLibraryPage.qml pages/LogsPage.qml pages/SettingsPage.qml pages/AboutPage.qml)
 target_link_libraries(danmaku_app PRIVATE danmaku_runtime Qt6::Quick Qt6::QuickControls2 QWindowKit::Quick)

@@ -5,6 +5,7 @@
 #include <QPointer>
 #include <QTimer>
 #include <QThreadPool>
+#include <QElapsedTimer>
 #include <functional>
 #include <memory>
 #include <stop_token>
@@ -49,6 +50,11 @@ class DanmakuLibrary final : public QObject {
     QString searchKeyword() const { return searchKeyword_; }
     QString requestedEpisode() const;
     void setServers(const QStringList& addresses);
+    // Public cache identity is distinct from credential-bearing endpoint.
+    void setPrivateEndpoint(const QString& alias, const QString& endpoint);
+    void setFreshDownloads(bool enabled) { freshDownloads_ = enabled; }
+    void setAutomaticSelection(bool enabled) { automaticSelection_ = enabled; }
+    void setExtendedIdentifiers(bool enabled) { extendedIdentifiers_ = enabled; }
     Q_INVOKABLE void searchAnime(const QString& keyword);
     Q_INVOKABLE void searchAnimeForEpisode(const QString& keyword, const QString& episodeTitle, double episodeNumber);
     Q_INVOKABLE void selectAnime(const QString& id);
@@ -76,6 +82,7 @@ class DanmakuLibrary final : public QObject {
         std::shared_ptr<OnlineDanmakuResult> result;
         QString error;
         QStringList aliases;
+        QString resolvedAnimeId;
     };
     enum class Operation { Other, Search, Episodes };
     Operation operation_{Operation::Other};
@@ -87,6 +94,8 @@ class DanmakuLibrary final : public QObject {
                  std::function<void(QByteArray)> completed);
     void work(std::function<Work(std::stop_token)> action, std::function<void(Work)> completed);
     void fetchEpisode(QVariantMap metadata);
+    void receiveEpisode(QByteArray bytes, QVariantMap metadata);
+    void pollTask(const QString& task, QVariantMap metadata);
     void acceptResult(std::shared_ptr<OnlineDanmakuResult> result);
     QVariantMap episodeMetadata() const;
     void invalidate();
@@ -103,6 +112,10 @@ class DanmakuLibrary final : public QObject {
     QNetworkAccessManager network_;
     QPointer<QNetworkReply> reply_;
     QTimer deadline_;
+    QTimer taskPoll_;
+    QElapsedTimer taskTime_;
+    QHash<QString, QString> endpoints_;
+    bool freshDownloads_{}, automaticSelection_{true}, extendedIdentifiers_{};
     int timeoutMs_, progress_{-1};
     bool busy_{}, scanning_{};
     quint64 generation_{}, scanGeneration_{};

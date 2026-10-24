@@ -1,6 +1,7 @@
 #include "platform/windows/MediaMonitor.h"
 #include "platform/windows/SmtcBackend.h"
 #include "infrastructure/VlcHttpBackend.h"
+#include "platform/windows/MpvIpcBackend.h"
 #include "platform/windows/PlayerProcessIdentity.h"
 #include <windows.h>
 #include <shobjidl.h>
@@ -25,8 +26,8 @@ QString qt(const hstring& text) {
 } // namespace
 MediaMonitor::MediaMonitor(QObject* parent, const QString& playerDirectory) : QObject(parent) {
     qRegisterMetaType<MediaSample>();
-    smtc_ = new SmtcBackend(this); vlc_ = new VlcHttpBackend(playerDirectory, this); active_ = smtc_;
-    for (auto* backend : {static_cast<MediaPlaybackBackend*>(smtc_), static_cast<MediaPlaybackBackend*>(vlc_)}) {
+    smtc_ = new SmtcBackend(this); vlc_ = new VlcHttpBackend(playerDirectory, this); mpv_ = new MpvIpcBackend(this); active_ = smtc_;
+    for (auto* backend : {static_cast<MediaPlaybackBackend*>(smtc_), static_cast<MediaPlaybackBackend*>(vlc_), static_cast<MediaPlaybackBackend*>(mpv_)}) {
         connect(backend, &MediaPlaybackBackend::sampleReceived, this, [this, backend](MediaSample sample) {
             if (backend == active_ && sample.id == selected_ && sample.generation == generation_) emit sampleReceived(sample);
         });
@@ -44,14 +45,17 @@ MediaMonitor::~MediaMonitor() {
     // Stop the worker while the facade's captured state still exists.
     delete smtc_; smtc_ = nullptr;
     delete vlc_; vlc_ = nullptr;
+    delete mpv_; mpv_ = nullptr;
 }
 void MediaMonitor::publishSessions() { auto list = smtcSessions_; list.append(vlcSessions_); emit sessionsChanged(list); }
 quint64 MediaMonitor::select(QString id, bool renew) {
     if (!renew && id == selected_) return generation_;
     ++generation_; selected_ = std::move(id);
-    active_ = vlc_->accepts(selected_) ? static_cast<MediaPlaybackBackend*>(vlc_) : smtc_;
+    active_ = mpv_->accepts(selected_) ? static_cast<MediaPlaybackBackend*>(mpv_)
+        : vlc_->accepts(selected_) ? static_cast<MediaPlaybackBackend*>(vlc_) : smtc_;
     smtc_->select(active_ == smtc_ ? selected_ : QString(), generation_);
     vlc_->select(active_ == vlc_ ? selected_ : QString(), generation_);
+    mpv_->select(active_ == mpv_ ? selected_ : QString(), generation_);
     return generation_;
 }
 void MediaMonitor::requestPlayback(MediaSample expected, bool play, quint64 request) {

@@ -273,6 +273,7 @@ ApplicationWindow {
         onManualSourceLoaded: root.navigate(1)
     }
     property bool xmlAsContent: false
+    ExternalMatchingDialog { session: root.backend.externalPlayback }
     FileDialog {
         id: playbackVideoPicker
         title: "打开视频"

@@ -6,7 +6,7 @@ class PlaybackCoordinator final : public QObject {
     Q_PROPERTY(Owner owner READ owner NOTIFY changed)
     Q_PROPERTY(quint64 generation READ generation NOTIFY changed)
   public:
-    enum Owner { None, Danmaku, Media };
+    enum Owner { None, Danmaku, Media, External };
     Q_ENUM(Owner)
     using QObject::QObject;
     Owner owner() const { return owner_; }

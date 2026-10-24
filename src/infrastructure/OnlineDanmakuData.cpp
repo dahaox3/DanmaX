@@ -130,7 +130,16 @@ OnlineDanmakuResult parseOnlineDanmaku(const QByteArray& json, std::stop_token s
                                   colorText.compare("undefined", Qt::CaseInsensitive) == 0)) {
             color = 0xffffff; colorOk = true;
         }
-        appendItem(result, time, timeOk, mode, modeOk, comment.value("m").toString(), color, colorOk);
+        int fontSize = 25;
+        if (comment.contains("fontSize")) {
+            const auto font = comment.value("fontSize");
+            const double size = font.toDouble(-1);
+            if (!font.isDouble() || !std::isfinite(size) || size < 1 || size > 200) {
+                ++result.invalid; continue;
+            }
+            fontSize = static_cast<int>(std::round(size));
+        }
+        appendItem(result, time, timeOk, mode, modeOk, comment.value("m").toString(), color, colorOk, fontSize);
     }
     finishItems(result, stop);
     if (!result.cancelled && result.items.empty()) result.error = QStringLiteral("该剧集没有可播放的弹幕");
@@ -155,8 +164,10 @@ OnlineDanmakuResult readCachedDanmaku(const QString& directory, const QString& k
     bool episodeOk{}, animeOk{};
     const auto episodeId = result.metadata.value("episodeId").toLongLong(&episodeOk);
     const auto animeId = result.metadata.value("animeId").toLongLong(&animeOk);
+    const bool extendedAnime = QRegularExpression(QStringLiteral("^[A-Za-z][A-Za-z0-9_-]{0,127}$"))
+        .match(result.metadata.value("animeId").toString()).hasMatch();
     const auto server = normalizeDanmakuServer(object.value("server").toString());
-    if (!episodeOk || episodeId <= 0 || !animeOk || animeId <= 0 || server.isEmpty() ||
+    if (!episodeOk || episodeId <= 0 || (!(animeOk && animeId > 0) && !extendedAnime) || server.isEmpty() ||
         key != danmakuCacheKey(server, episodeId) || object.value("animeTitle").toString().isEmpty() ||
         object.value("episodeTitle").toString().isEmpty() ||
         !QDateTime::fromString(object.value("downloadedAt").toString(), Qt::ISODateWithMs).isValid() ||

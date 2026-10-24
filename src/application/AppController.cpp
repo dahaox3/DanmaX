@@ -1,5 +1,6 @@
 #include "application/AppController.h"
 #include "infrastructure/XmlLoader.h"
+#include "platform/windows/MpvIpcBackend.h"
 #include <QDir>
 #include <QFontDatabase>
 #include <QGuiApplication>
@@ -29,6 +30,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
       players_(dataDirectory, this),
       monitor_(this, QDir(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory).filePath("players/vlc")),
       media_(dataDirectory, cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this, &videoOpen_, &players_, &monitor_),
+      external_(dataDirectory, cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       nowPlaying_(this),
       foregroundQuery_(foregroundQuery ? std::move(foregroundQuery) : ForegroundQuery(MediaMonitor::targetForeground)),
       mainForegroundQuery_(mainForegroundQuery ? std::move(mainForegroundQuery) : MainForegroundQuery([](QWindow* window) {
@@ -117,6 +119,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
         emit sessionsChanged();
     });
     connect(&monitor_, &MediaMonitor::sampleReceived, this, &AppController::onSample);
+    connect(&external_, &ExternalPlaybackSession::showChoice, this, &AppController::showMainWindow);
     connect(&monitor_, &MediaMonitor::errorOccurred, this,
             [this](const QString& message) {
                 // Poll failures are recoverable. onSample enters WaitingForPlayer;
@@ -177,6 +180,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     logs_.append("INFO", QStringLiteral("C++ / Qt FluentWinUI3 已启动"));
 }
 AppController::~AppController() {
+    external_.deactivate();
     media_.deactivate();
     windowLayers_.attach(nullptr, nullptr, nullptr);
     settings_.flushPending();
@@ -303,7 +307,7 @@ void AppController::configure() {
                          s["danmakuServers"].toStringList());
     if (!automatic_.enabled()) automaticSource_ = false;
     logs_.configure(s["logToFile"].toBool(), s["logLevel"].toString());
-    if (coordinator_.owner() != PlaybackCoordinator::Media && lastSettings_.value("targetSession") != s["targetSession"]) {
+    if (coordinator_.owner() != PlaybackCoordinator::Media && coordinator_.owner() != PlaybackCoordinator::External && lastSettings_.value("targetSession") != s["targetSession"]) {
         automatic_.reset();
         if (automaticSource_) { resetPlayback(true); automaticSource_ = false; }
         mediaGeneration_ = monitor_.select(s["targetSession"].toString(), true);
@@ -367,16 +371,18 @@ bool AppController::updatePresentationVisibility(bool forceForeground, bool noti
     // Leaving the panel must not reuse its preceding player foreground sample.
     forceForeground = forceForeground || (panelForeground_ && !panelForeground);
     panelForeground_ = panelForeground;
-    const bool checkForeground = !manual_ && settings_.values()["foregroundOnly"].toBool();
+    const bool external = coordinator_.owner() == PlaybackCoordinator::External;
+    const bool checkForeground = external || (!manual_ && settings_.values()["foregroundOnly"].toBool());
     if (running_ && checkForeground &&
         (forceForeground || !foregroundTime_.isValid() || foregroundTime_.elapsed() >= 250)) {
-        foreground_ = foregroundQuery_(boundSession());
+        foreground_ = external ? monitor_.mpv()->foreground() : foregroundQuery_(boundSession());
         foregroundTime_.start();
     }
     const double connectionAge = MediaMonitor::monotonicSeconds() - connectionObservedAt_;
     const bool mediaAvailable = targetSessionConnected_ && connectionAge >= 0 && connectionAge <= 2.5;
     desiredOverlayAllowed_ = running_ && (manual_ || mediaAvailable) && (!checkForeground || foreground_ || panelForeground_);
-    const bool layerReady = windowLayers_.reconcile(settings_.values()["onTop"].toBool(),
+    if (external) desiredOverlayAllowed_ = desiredOverlayAllowed_ && monitor_.mpv()->windowVisible();
+    const bool layerReady = windowLayers_.reconcile(external || settings_.values()["onTop"].toBool(),
                                                    panelForeground_, desiredOverlayAllowed_);
     const bool show = desiredOverlayAllowed_ && (!panelForeground_ || layerReady);
     const bool toolbarAllowed = show;
@@ -420,6 +426,26 @@ void AppController::updateWindow() {
     if (!overlay_)
         return;
     const auto s = settings_.values();
+    if (coordinator_.owner() == PlaybackCoordinator::External && monitor_.mpv()->window()) {
+        // Native pixels must be converted relative to the target screen origin:
+        // desktop origins are not uniformly scaled on mixed-DPI Windows setups.
+        const auto rect = monitor_.mpv()->clientRect();
+        QScreen* screen = nullptr;
+        for (auto* candidate : QGuiApplication::screens())
+            if (candidate->name() == monitor_.mpv()->screenName()) { screen = candidate; break; }
+        if (!screen) screen = overlay_->screen();
+        if (!screen || rect.isEmpty()) return;
+        const auto origin = screen->geometry().topLeft();
+        const auto nativeOrigin = monitor_.mpv()->nativeScreenRect().topLeft();
+        const double dpr = screen->devicePixelRatio();
+        const QRect logical(origin + QPoint(qRound((rect.x() - nativeOrigin.x()) / dpr), qRound((rect.y() - nativeOrigin.y()) / dpr)),
+                            QSize(qRound(rect.width() / dpr), qRound(rect.height() / dpr)));
+        if (overlay_->screen() != screen) overlay_->setScreen(screen);
+        if (overlay_->geometry() != logical) overlay_->setGeometry(logical);
+        if (!overlay_->flags().testFlag(Qt::WindowStaysOnTopHint)) overlay_->setFlag(Qt::WindowStaysOnTopHint, true);
+        if (toolbarWindow_ && !toolbarWindow_->flags().testFlag(Qt::WindowStaysOnTopHint)) toolbarWindow_->setFlag(Qt::WindowStaysOnTopHint, true);
+        return;
+    }
     const auto list = qGuiApp->screens();
     if (list.isEmpty())
         return;
@@ -442,6 +468,7 @@ void AppController::loadFile(const QString& input) {
     const auto path = localPath(input);
     if (path.isEmpty())
         return;
+    if (coordinator_.owner() == PlaybackCoordinator::External) handoff(PlaybackCoordinator::Danmaku);
     unloadDanmaku();
     const auto generation = ++loadGeneration_;
     loading_ = true;
@@ -528,7 +555,7 @@ void AppController::start(bool manual) {
         if (loading_ || (danmaku_.items_.empty() && (manual || !settings_.values()["automaticDanmaku"].toBool()))) {
             fail(QStringLiteral("请先载入弹幕，或开启自动匹配后开始跟随"), true); return;
         }
-        const bool replacingMedia = coordinator_.owner() == PlaybackCoordinator::Media;
+        const bool replacingMedia = coordinator_.owner() == PlaybackCoordinator::Media || coordinator_.owner() == PlaybackCoordinator::External;
         if (replacingMedia) handoff(PlaybackCoordinator::Danmaku);
         else { automatic_.reset(); library_.cancel(); discardLoad(); coordinator_.acquire(PlaybackCoordinator::Danmaku); }
         startup_ = false; manual_ = manual; danmaku_.manual_ = manual;
@@ -573,6 +600,7 @@ void AppController::start(bool manual) {
     emit metricsChanged();
 }
 void AppController::stop() {
+    if (coordinator_.owner() == PlaybackCoordinator::External) { external_.stop(); return; }
     if (coordinator_.owner() == PlaybackCoordinator::Media) { media_.stopDanmaku(); return; }
     videoOpen_.cancel();
     automatic_.suspend(); automaticSource_ = false;
@@ -581,6 +609,7 @@ void AppController::stop() {
     resetPlayback(false);
 }
 void AppController::unload() {
+    if (coordinator_.owner() == PlaybackCoordinator::External) { external_.stop(); return; }
     if (coordinator_.owner() == PlaybackCoordinator::Media) { media_.unload(); return; }
     unloadDanmaku();
 }
@@ -630,9 +659,11 @@ void AppController::commitDanmakuItems(std::vector<danmaku::Item> items, const Q
     emit danmaku_.changed();
 }
 QString AppController::boundSession() const {
+    if (coordinator_.owner() == PlaybackCoordinator::External) return external_.boundSession();
     return coordinator_.owner() == PlaybackCoordinator::Media ? media_.boundSession() : settings_.values()["targetSession"].toString();
 }
 void AppController::handoff(PlaybackCoordinator::Owner owner) {
+    if (coordinator_.owner() == PlaybackCoordinator::External) external_.deactivate();
     if (coordinator_.owner() == PlaybackCoordinator::Media) media_.deactivate();
     automatic_.reset(); library_.cancel(); discardLoad();
     automaticSource_ = false; resetPlayback(true); coordinator_.acquire(owner);
@@ -644,14 +675,14 @@ void AppController::bindMedia(const QString& id) {
     targetSessionConnected_ = false; connectionObservedAt_ = 0; error_.clear(); emit stateChanged();
 }
 void AppController::presentMedia(std::vector<danmaku::Item> items, const QString& title, MediaSample sample) {
-    if (coordinator_.owner() != PlaybackCoordinator::Media) return;
+    if (coordinator_.owner() != PlaybackCoordinator::Media && coordinator_.owner() != PlaybackCoordinator::External) return;
     QScopedValueRollback presenting(presentingMedia_, true);
     QScopedValueRollback commit(automaticCommit_, true);
     QScopedValueRollback source(automaticSource_, true);
     commitItems(std::move(items), title); start(false); sample.generation = mediaGeneration_; onSample(sample);
 }
 void AppController::clearMediaItems() {
-    if (coordinator_.owner() != PlaybackCoordinator::Media) return;
+    if (coordinator_.owner() != PlaybackCoordinator::Media && coordinator_.owner() != PlaybackCoordinator::External) return;
     QScopedValueRollback source(automaticSource_, true); resetPlayback(true);
 }
 void AppController::applyChineseConversion() {
@@ -753,6 +784,7 @@ void AppController::selectSession(const QString& id) {
     settings_.setValue("targetSession", target);
 }
 void AppController::setAutomaticDanmaku(bool enabled) {
+    if (enabled && coordinator_.owner() == PlaybackCoordinator::External) handoff(PlaybackCoordinator::Danmaku);
     if (enabled && coordinator_.owner() != PlaybackCoordinator::Media) {
         if (coordinator_.owner() == PlaybackCoordinator::None) handoff(PlaybackCoordinator::Danmaku);
         startup_ = false;
@@ -813,7 +845,9 @@ void AppController::onSample(const MediaSample& s) {
         }
         if (connected) disconnectCleanup_.stop();
         else if (running_ && !manual_ && !disconnectedContentCleared_ && !disconnectCleanup_.isActive()) disconnectCleanup_.start();
-        if (coordinator_.owner() == PlaybackCoordinator::Media) {
+        if (coordinator_.owner() == PlaybackCoordinator::External) {
+            if (!presentingMedia_) external_.observe(s);
+        } else if (coordinator_.owner() == PlaybackCoordinator::Media) {
             if (!presentingMedia_) media_.observe(s);
         } else if (!manual_ && !startup_ && coordinator_.owner() == PlaybackCoordinator::Danmaku) automatic_.observe(s);
         nowPlaying_.observe(s);
@@ -850,7 +884,7 @@ void AppController::onSample(const MediaSample& s) {
     double actual = std::max(0.0, s.position);
     if (s.duration > 0) actual = std::min(actual, s.duration);
     const bool stopped = s.playback == MediaSample::Playback::Stopped;
-    const auto identity = automaticSource_ && coordinator_.owner() != PlaybackCoordinator::Media ? automatic_.contentIdentity() : s.identity;
+    const auto identity = automaticSource_ && coordinator_.owner() == PlaybackCoordinator::Danmaku ? automatic_.contentIdentity() : s.identity;
     const bool changed = !syncConnected_ || mediaIdentity_ != identity ||
                          (stopped && playbackState_ != PlayerStopped);
     const bool reset = mediaClock_.synchronize(actual, rate, samplePlaying,
@@ -1066,9 +1100,18 @@ void AppController::writeReport(const QString& path) {
     metrics_["status"] = status_;
     metrics_["qtVersion"] = qVersion();
     metrics_["requestedCount"] = total();
+    metrics_["externalActive"] = external_.active();
+    metrics_["externalStatus"] = external_.status();
+    metrics_["externalError"] = external_.error();
+    metrics_["externalEpisode"] = external_.metadata().value("episodeId");
+    metrics_["externalProcess"] = external_.boundSession();
+    metrics_["overlayVisible"] = visible_;
+    metrics_["mainVisible"] = mainWindow_ && mainWindow_->isVisible();
     metrics_["metricNote"] =
         "p95/p99 are GUI tick intervals; presentedPerSecond counts overlay frameSwapped, not optical FPS; CPU normalized across logical processors";
     if (overlay_) {
+        const auto rect = overlay_->geometry();
+        metrics_["overlayRect"] = QVariantList{rect.x(), rect.y(), rect.width(), rect.height()};
         metrics_["refreshRate"] = overlay_->screen()->refreshRate();
         metrics_.insert(MediaMonitor::windowMetrics(overlay_->winId()));
     }
@@ -1124,6 +1167,7 @@ void AppController::showMainWindow() {
     windowLayers_.invalidate();
 }
 void AppController::showOnlineDanmakuForAnime(const QString& animeTitle, const QString& episodeTitle, double episodeNumber) {
+    if (coordinator_.owner() == PlaybackCoordinator::External) handoff(PlaybackCoordinator::Danmaku);
     automatic_.suspend();
     showMainWindow();
     emit requestOnlineDanmakuSearch();

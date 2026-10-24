@@ -1,5 +1,7 @@
 # 旧版 mpv 分支
 
+Emby 网页 MPV 按钮自动匹配服务器弹幕、按进程跟随及关闭清理，见 [Emby mpv 集成说明](EMBY_MPV.md)。原有手动 SMTC 工作流继续保留。
+
 此分支以 2026-10-17 的 554c74a 为基底，早于移除通用媒体会话入口的 d428344。保留原来的 SmtcReader、SmtcBackend、MediaMonitor 和 PlaybackSetupPane；未以新版播放器流程替代旧版。
 
 在 mpv 中载入视频，再从 DanmaX 底部的“播放器”展开来源和播放方式，选择“跟随播放器”，在媒体会话列表选择 mpv.exe。加载弹幕后开始播放。mpv 必须继续提供此前可用的 Windows SMTC 会话；设置中的 PotPlayer/VLC 外部播放器预设与这份媒体会话列表是两个入口。

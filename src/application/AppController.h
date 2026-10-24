@@ -9,6 +9,7 @@
 #include "application/DanmakuSession.h"
 #include "application/MediaSession.h"
 #include "application/NowPlayingModel.h"
+#include "application/ExternalPlaybackSession.h"
 #include "infrastructure/ExternalPlayerStore.h"
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
@@ -38,6 +39,7 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* media READ media CONSTANT)
     Q_PROPERTY(QObject* coordinator READ coordinator CONSTANT)
     Q_PROPERTY(QObject* nowPlaying READ nowPlaying CONSTANT)
+    Q_PROPERTY(QObject* externalPlayback READ externalPlayback CONSTANT)
     Q_PROPERTY(QObject* players READ players CONSTANT)
     Q_PROPERTY(QObject* metadata READ metadata CONSTANT)
     Q_PROPERTY(QObject* uiPreferences READ uiPreferences CONSTANT)
@@ -91,6 +93,8 @@ class AppController final : public QObject {
     QObject* media() { return &media_; }
     QObject* coordinator() { return &coordinator_; }
     QObject* nowPlaying() { return &nowPlaying_; }
+    QObject* externalPlayback() { return &external_; }
+    QString openExternalSession(const QString& file) { return external_.open(file); }
     QObject* players() { return &players_; }
     QObject* metadata() { return &metadata_; }
     QObject* uiPreferences() { return &uiPreferences_; }
@@ -200,6 +204,7 @@ class AppController final : public QObject {
     friend class DanmakuSession;
     friend class MediaSession;
     friend class NowPlayingModel;
+    friend class ExternalPlaybackSession;
     void handoff(PlaybackCoordinator::Owner owner);
     void bindMedia(const QString& id);
     void presentMedia(std::vector<danmaku::Item> items, const QString& title, MediaSample sample);
@@ -240,6 +245,7 @@ class AppController final : public QObject {
     SystemUiPreferences uiPreferences_;
     MediaMonitor monitor_;
     MediaSession media_;
+    ExternalPlaybackSession external_;
     NowPlayingModel nowPlaying_;
     bool presentingMedia_{};
     bool startup_{true};
