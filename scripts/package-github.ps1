@@ -24,7 +24,7 @@ New-Item -ItemType Directory -Force (Join-Path $stage 'licenses') | Out-Null
 # Network preparation is explicit here; CMake configure/build never downloads.
 $qtSources = Get-Content (Get-ProjectPath 'toolchain/qt-static.lock.json') -Raw | ConvertFrom-Json
 $sourceCache = Get-ProjectPath '.cache/downloads'
-$tar = Join-Path $env:SystemRoot 'System32/tar.exe'
+$archiveTool = (Get-ToolPaths).CMake
 foreach ($asset in $qtSources.assets | Where-Object { $_.module -ne 'qt5compat' }) {
     $archive = Join-Path $sourceCache $asset.name
     if (-not (Test-Path -LiteralPath $archive)) {
@@ -41,7 +41,9 @@ foreach ($asset in $qtSources.assets | Where-Object { $_.module -ne 'qt5compat' 
     $licenseStage = Join-Path $materials "$($asset.module)-notices"
     New-Item -ItemType Directory -Force $licenseStage | Out-Null
     $prefix = $asset.name -replace '\.tar\.xz$',''
-    Invoke-Checked $tar @('-xf', $archive, '-C', $licenseStage, '--strip-components', '1', "$prefix/LICENSES")
+    Push-Location -LiteralPath $licenseStage
+    try { Invoke-Checked $archiveTool @('-E', 'tar', 'xf', $archive, "$prefix/LICENSES") }
+    finally { Pop-Location }
     Copy-Item -LiteralPath $licenseStage -Destination (Join-Path $stage 'licenses') -Recurse -Force
 }
 

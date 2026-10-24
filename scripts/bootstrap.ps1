@@ -29,7 +29,17 @@ Invoke-ProjectEnvironment {
             }
             if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.sha256) { throw "Checksum mismatch: $($asset.name)" }
             Write-Host "Extracting $($asset.name)"
-            Invoke-Checked $tar @('-xf', $archive, '-C', $stage)
+            if ($asset.name.EndsWith('.7z')) {
+                # Server 2022's inbox tar lacks LZMA. The verified CMake ZIP
+                # group is prepared before Qt and includes a full libarchive.
+                $archiveTool = (Get-ToolPaths).CMake
+                if (-not (Test-Path -LiteralPath $archiveTool)) { throw 'Prepare locked CMake before Qt archives.' }
+                Push-Location -LiteralPath $stage
+                try { Invoke-Checked $archiveTool @('-E', 'tar', 'xf', $archive) }
+                finally { Pop-Location }
+            } else {
+                Invoke-Checked $tar @('-xf', $archive, '-C', $stage)
+            }
         }
         $source = $stage
         if ($group.Group[0].PSObject.Properties.Name -contains 'stripPrefix') {
