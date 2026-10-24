@@ -25,6 +25,8 @@
 
 本 fork 的默认分支 `legacy-mpv` 基于旧版 `554c74a`（2026-10-17），保留通用 SMTC 媒体会话选择，可继续从播放器列表选择 mpv；在此基础上加入 XML 小数字号取整、滚动／固定分类避让和可调帧率上限。使用入口及验证范围见 [旧版 mpv 分支说明](docs/LEGACY_MPV.md)。
 
+Windows 编译包由 [GitHub Actions](../../actions/workflows/windows-release.yml) 生成；推送 `legacy-mpv-v*` 标签后自动发布运行 ZIP、对应源码材料和 SHA-256，详见 [云端发布说明](docs/GITHUB_RELEASE.md)。
+
 **DanmaX** 是一款专为 Windows 平台打造的原生高性能外挂弹幕工具。它能够将弹幕以完全鼠标穿透、自适应刷新率、低系统资源开销的方式，悬浮置顶在任意本地视频播放器（如 PotPlayer、MPC-HC、VLC、mpv 等）或网页浏览器之上。
 
 ### 解决的核心痛点

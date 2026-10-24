@@ -1,0 +1,93 @@
+name: Windows mpv release
+
+on:
+  push:
+    tags: ['legacy-mpv-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .tools
+            .cache/downloads
+            .cache/anitomy
+          key: windows-sdk-${{ hashFiles('toolchain/dependencies.lock.json', 'toolchain/anitomy.lock.json', 'toolchain/qt-static.lock.json', 'scripts/bootstrap.ps1') }}
+      - name: Declare locked MSVC and Windows SDK
+        run: ./scripts/ci-prepare.ps1
+      - name: Prepare verified dependencies
+        run: |
+          ./scripts/bootstrap.ps1
+          ./scripts/prepare-anitomy.ps1
+          ./scripts/prepare-qwindowkit.ps1 -FromGit
+      - name: Build Release
+        run: ./scripts/build.ps1 -Preset windows-release
+      - name: Run regression tests
+        run: |
+          . ./scripts/common.ps1
+          Invoke-ProjectEnvironment {
+            $tools = Initialize-Toolchain
+            Invoke-Checked $tools.CTest @('--preset', 'windows-release', '-E', '^(online_danmaku|anime_metadata|ui_workflow|overlay_toolbar)$')
+          }
+      - name: Build clean distribution and source materials
+        env:
+          RELEASE_ID: ${{ github.ref_type == 'tag' && github.ref_name || format('legacy-mpv-build-{0}', github.run_number) }}
+        run: ./scripts/package-github.ps1 -ReleaseId $env:RELEASE_ID
+      - name: Upload release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-x64-release
+          path: out/github-release/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload test diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-diagnostics
+          path: |
+            out/build/windows-release/Testing/Temporary/LastTest.log
+            out/build/windows-release/*tests.txt
+            out/validation/github-release/*
+          if-no-files-found: ignore
+          retention-days: 14
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/legacy-mpv-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-x64-release
+          path: release
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" release/*.zip release/checksums.txt release/build-info.json \
+            --verify-tag --title "DanmaX $RELEASE_TAG · Windows x64" \
+            --notes-file release/release-notes.md --latest

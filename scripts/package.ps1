@@ -120,4 +120,5 @@ in static-exe. These materials are not a completed component-by-component licens
     Write-Host "Development deployment created: $stage"
     if ($Format -eq 'single-exe') { New-PortableExecutable -Stage $stage -Tools $tools -Timestamp $timestamp }
     Write-Host 'Requires the official Microsoft Visual C++ 2015-2022 x64 runtime. Review THIRD_PARTY.md before public distribution.'
+    if ($Format -eq 'directory') { Write-Output $stage }
 }
