@@ -13,8 +13,21 @@
 #include <QScreen>
 #include <QScopedValueRollback>
 #include <QUrl>
+#include <QSurfaceFormat>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
+namespace {
+qint64 frameTimestamp() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+// Owned by the render-thread callbacks. Only value copies cross to the GUI.
+struct RenderTiming {
+    qint64 begin{}, sync{}, rendering{}, rendered{};
+    quint64 tick{};
+};
+}
 AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQuery foregroundQuery,
                              QString cacheDirectory, MainForegroundQuery mainForegroundQuery,
                              ToolbarPointerMonitor::CursorQuery cursorQuery, WindowLayerController::Positioner positioner,
@@ -140,9 +153,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     timer_.setTimerType(Qt::PreciseTimer);
     monotonicTime_.start();
     timer_.setInterval(33);
-    frameRequestTimer_.setSingleShot(true);
-    frameRequestTimer_.setTimerType(Qt::PreciseTimer);
-    connect(&frameRequestTimer_, &QTimer::timeout, this, &AppController::requestNextFrame);
+    connect(&frameRequestTimer_, &FrameWakeup::timeout, this, &AppController::requestNextFrame);
     disconnectCleanup_.setSingleShot(true);
     disconnectCleanup_.setInterval(1500);
     connect(&disconnectCleanup_, &QTimer::timeout, this, &AppController::clearDisconnectedContent);
@@ -236,6 +247,14 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
         fail(QStringLiteral("弹幕窗口初始化失败"));
         return;
     }
+    // Windows already delivers update requests through Qt's DXGI vsync service.
+    // This transparent window is composited by DWM. Waiting for another swap
+    // interval inside beginFrame serializes both gates and stalls scene sync.
+    // Keep the panel/tool windows on their normal presentation settings.
+    auto overlayFormat = overlay_->format();
+    overlayFormat.setSwapInterval(qEnvironmentVariableIsSet("DANMAX_OVERLAY_SWAP_INTERVAL")
+        ? qEnvironmentVariableIntValue("DANMAX_OVERLAY_SWAP_INTERVAL") : 0);
+    overlay_->setFormat(overlayFormat);
     toolbarInputFilter_.attach(toolbarWindow_);
     toolbarPointer_.attach(overlay_, toolbarWindow_);
     windowLayers_.attach(mainWindow_, overlay_, toolbarWindow_);
@@ -249,7 +268,8 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
     connect(overlay_, &QWindow::heightChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::visibleChanged, this, [this](bool shown) {
         frameRequestTimer_.stop();
-        animationFrameTime_.invalidate();
+        framePacer_.reset();
+        presentationTime_.invalidate();
         windowLayers_.reconcile(settings_.values()["onTop"].toBool(), panelForeground_, desiredOverlayAllowed_);
         toolbarPointer_.setEnabled(toolbarAllowed_ && shown);
         snapshotDirty_ = true;
@@ -259,27 +279,63 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
         }
     });
     if (auto* quick = qobject_cast<QQuickWindow*>(overlay)) {
+        const auto timing = std::make_shared<RenderTiming>();
+        connect(quick, &QQuickWindow::beforeFrameBegin, this, [timing] {
+            timing->begin = frameTimestamp();
+        }, Qt::DirectConnection);
+        connect(quick, &QQuickWindow::beforeSynchronizing, this, [this, timing] {
+            timing->sync = frameTimestamp();
+            // Qt blocks the GUI thread throughout scene-graph synchronization.
+            timing->tick = frameTicks_;
+        }, Qt::DirectConnection);
+        connect(quick, &QQuickWindow::beforeRendering, this, [timing] {
+            timing->rendering = frameTimestamp();
+        }, Qt::DirectConnection);
+        connect(quick, &QQuickWindow::afterRendering, this, [timing] {
+            timing->rendered = frameTimestamp();
+        }, Qt::DirectConnection);
         connect(quick, &QQuickWindow::afterAnimating, this, [this, quick] {
             ++animationCallbacks_;
             if (running_ && visible_ && quick->isVisible() && quick->isExposed() && (playing_ || snapshotDirty_)) {
                 if (playing_ && settings_.values().value("maxFps").toInt() > 0 &&
-                    animationFrameTime_.isValid()) {
+                    framePacer_.started()) {
                     // Capped frames prepare their snapshot before requesting a
                     // render. Do not publish it again during afterAnimating.
                     return;
                 }
-                animationFrameTime_.start();
+                framePacer_.published(monotonicTime_.nsecsElapsed());
                 if (playing_) ++frameTicks_;
                 tick();
             }
         });
         connect(
-            quick, &QQuickWindow::frameSwapped, this, [this] {
-                ++renderedFrames_;
-                // Item::update during afterAnimating can be consumed by the current
-                // sync. Request the NEXT frame after presentation, on the GUI thread.
-                requestNextFrame();
-            }, Qt::QueuedConnection);
+            quick, &QQuickWindow::frameSwapped, this, [this, timing] {
+                const auto presentedAt = frameTimestamp();
+                const auto frame = *timing;
+                QMetaObject::invokeMethod(this, [this, presentedAt, frame] {
+                    ++renderedFrames_;
+                    if (running_ && playing_ && visible_) {
+                        if (lastPresentedTick_ != frame.tick) {
+                            if (presentationTime_.isValid()) {
+                                presentationIntervals_.push_back((presentedAt - lastPresentationNs_) * 1e-6);
+                                if (presentationIntervals_.size() > 600) presentationIntervals_.erase(presentationIntervals_.begin());
+                            }
+                            presentationTime_.start(); lastPresentedTick_ = frame.tick;
+                            lastPresentationNs_ = presentedAt;
+                            if (frame.begin && frame.sync >= frame.begin && frame.rendering >= frame.sync && frame.rendered >= frame.rendering) {
+                                renderTimings_.push_back({(frame.sync - frame.begin) * 1e-6,
+                                    (frame.rendered - frame.sync) * 1e-6,
+                                    (presentedAt - frame.rendered) * 1e-6,
+                                    (frameTimestamp() - presentedAt) * 1e-6});
+                                if (renderTimings_.size() > 600) renderTimings_.erase(renderTimings_.begin());
+                            }
+                        }
+                    } else presentationTime_.invalidate();
+                    // Item::update during afterAnimating can be consumed by the current
+                    // sync. Request the NEXT frame after presentation, on the GUI thread.
+                    requestNextFrame();
+                }, Qt::QueuedConnection);
+            }, Qt::DirectConnection);
     }
     configure();
 }
@@ -298,6 +354,8 @@ void AppController::configure() {
     const auto s = settings_.values();
     if (lastSettings_.value("maxFps") != s["maxFps"]) {
         frameRequestTimer_.stop();
+        framePacer_.configure(s["maxFps"].toInt());
+        presentationTime_.invalidate(); presentationIntervals_.clear(); renderTimings_.clear();
         requestNextFrame();
     }
     media_.configure(s["danmakuServers"].toStringList());
@@ -704,7 +762,8 @@ void AppController::resetPlayback(bool unloadSource) {
     disconnectedContentCleared_ = false;
     timer_.stop();
     frameRequestTimer_.stop();
-    animationFrameTime_.invalidate();
+    framePacer_.reset();
+    presentationTime_.invalidate(); presentationIntervals_.clear(); renderTimings_.clear();
     running_ = playing_ = visible_ = demo_ = false;
     toolbarAllowed_ = desiredOverlayAllowed_ = false;
     windowLayers_.reconcile(settings_.values()["onTop"].toBool(), false, false);
@@ -794,8 +853,9 @@ void AppController::setAutomaticDanmaku(bool enabled) {
     if (enabled) automatic_.retry();
 }
 void AppController::setPlaybackState(PlaybackState state) {
-    if (state == Playing && playbackState_ != Playing) animationFrameTime_.invalidate();
+    if (state == Playing && playbackState_ != Playing) framePacer_.reset();
     if (!playing_) frameRequestTimer_.stop();
+    if (!playing_) presentationTime_.invalidate();
     playbackState_ = state;
     switch (state) {
     case Empty: status_ = QStringLiteral("请选择弹幕文件"); break;
@@ -908,10 +968,7 @@ void AppController::onSample(const MediaSample& s) {
     emit metricsChanged();
 }
 qint64 AppController::frameDelayNs() const {
-    const int fps = settings_.values().value("maxFps").toInt();
-    if (fps == 0 || !animationFrameTime_.isValid()) return 0;
-    const qint64 interval = (1000000000LL + fps - 1) / fps;
-    return std::max<qint64>(0, interval - animationFrameTime_.nsecsElapsed());
+    return framePacer_.delay(monotonicTime_.nsecsElapsed());
 }
 void AppController::requestNextFrame() {
     auto* quick = qobject_cast<QQuickWindow*>(overlay_.data());
@@ -922,14 +979,14 @@ void AppController::requestNextFrame() {
     const auto delay = frameDelayNs();
     if (delay > 0) {
         if (!frameRequestTimer_.isActive())
-            frameRequestTimer_.start(static_cast<int>((delay + 999999) / 1000000));
+            frameRequestTimer_.start(std::chrono::nanoseconds(delay));
     } else {
         frameRequestTimer_.stop();
         if (settings_.values().value("maxFps").toInt() > 0) {
             // Publish before Qt begins this frame, so Item::update does not
             // enqueue an extra frame from inside afterAnimating. The capped
             // and uncapped drivers are mutually exclusive and share tick().
-            animationFrameTime_.start();
+            framePacer_.published(monotonicTime_.nsecsElapsed());
             ++frameTicks_;
             tick();
         } else quick->update();
@@ -985,7 +1042,7 @@ void AppController::tick() {
     stage.restart();
     if (renderable && (playing_ || visibilityChanged || snapshotDirty_)) {
         if (danmakuVisible_) {
-            renderer_->present(engine_);
+            renderer_->present(engine_, playing_ ? settings_.values()["speed"].toDouble() * (manual_ ? 1 : rate_) : 0);
         } else {
             renderer_->clearContent();
         }
@@ -1009,6 +1066,7 @@ void AppController::updateMetrics() {
     metrics_ = MediaMonitor::processMetrics();
     metrics_["active"] = static_cast<int>(engine_.activeCount());
     metrics_["maxFps"] = settings_.values().value("maxFps").toInt();
+    metrics_["highResolutionPacing"] = frameRequestTimer_.highResolution();
     metrics_["dropped"] = static_cast<qulonglong>(engine_.dropped());
     metrics_["retiredBySettings"] = static_cast<qulonglong>(engine_.retiredBySettings());
     metrics_["suppressedWhileHidden"] = static_cast<qulonglong>(engine_.suppressedWhileHidden());
@@ -1036,6 +1094,7 @@ void AppController::updateMetrics() {
         metrics_["cacheMisses"] = static_cast<qulonglong>(renderer_->cacheMisses());
         metrics_["renderBackend"] = renderer_->imageBackend() ? "cached-raster" : "qt-text";
         metrics_["snapshotCount"] = renderer_->snapshotCount();
+        metrics_["snapshotAgeMs"] = renderer_->snapshotAgeMs();
         metrics_["imageNodes"] = renderer_->imageNodeCount();
         metrics_["textFallbackNodes"] = renderer_->sceneEntries() - renderer_->imageNodeCount();
         metrics_["sceneEntries"] = renderer_->sceneEntries();
@@ -1050,10 +1109,36 @@ void AppController::updateMetrics() {
         metrics_["p95Ms"] = sorted[static_cast<std::size_t>((sorted.size() - 1) * 0.95)];
         metrics_["p99Ms"] = sorted[static_cast<std::size_t>((sorted.size() - 1) * 0.99)];
     }
+    auto presented = presentationIntervals_;
+    const char* timingKeys[]{"renderWaitP99Ms", "renderCpuP99Ms", "renderSubmitP99Ms", "guiDeliveryP99Ms"};
+    for (size_t column = 0; column < 4; ++column) {
+        std::vector<double> values;
+        for (const auto& row : renderTimings_) values.push_back(row[column]);
+        std::sort(values.begin(), values.end());
+        metrics_[timingKeys[column]] = values.empty() ? 0 : values[size_t((values.size() - 1) * .99)];
+    }
+    std::sort(presented.begin(), presented.end());
+    metrics_["presentationSampleCount"] = static_cast<qulonglong>(presented.size());
+    if (!presented.empty()) {
+        double totalMs = 0;
+        for (const auto ms : presented) totalMs += ms;
+        metrics_["presentMeanMs"] = totalMs / presented.size();
+        metrics_["presentMedianMs"] = presented[presented.size() / 2];
+        metrics_["presentMaxMs"] = presented.back();
+        metrics_["presentP95Ms"] = presented[static_cast<size_t>((presented.size() - 1) * .95)];
+        metrics_["presentP99Ms"] = presented[static_cast<size_t>((presented.size() - 1) * .99)];
+        if (presented.size() >= 100) {
+            const size_t count = (presented.size() + 99) / 100;
+            double slowest = 0;
+            for (size_t i = 0; i < count; ++i) slowest += presented[presented.size() - 1 - i];
+            metrics_["onePercentLowFps"] = slowest > 0 ? 1000.0 * count / slowest : 0;
+        }
+    }
     if (overlay_) {
         metrics_["width"] = overlay_->width();
         metrics_["height"] = overlay_->height();
         metrics_["dpr"] = overlay_->devicePixelRatio();
+        metrics_["swapInterval"] = overlay_->format().swapInterval();
     }
     updatePresentationVisibility();
     emit metricsChanged();
@@ -1092,7 +1177,15 @@ void AppController::beginDemo(int count) {
 }
 void AppController::writeReport(const QString& path) {
     updateMetrics();
-    metrics_["sessions"] = sessions_;
+    QVariantList intervals;
+    intervals.reserve(qsizetype(presentationIntervals_.size()));
+    for (const auto ms : presentationIntervals_) intervals.append(ms);
+    metrics_["presentationIntervalsMs"] = intervals;
+    // SMTC titles can be stream URLs with embedded credentials. Diagnostics
+    // need session identity only, never provider-supplied titles or labels.
+    QVariantList safeSessions;
+    for (const auto& session : sessions_) safeSessions.append(QVariantMap{{"id", session.toMap().value("id")}});
+    metrics_["sessions"] = safeSessions;
     metrics_["mediaTitle"] = mediaTitle_;
     metrics_["position"] = position_;
     metrics_["duration"] = duration_;
@@ -1108,7 +1201,7 @@ void AppController::writeReport(const QString& path) {
     metrics_["overlayVisible"] = visible_;
     metrics_["mainVisible"] = mainWindow_ && mainWindow_->isVisible();
     metrics_["metricNote"] =
-        "p95/p99 are GUI tick intervals; presentedPerSecond counts overlay frameSwapped, not optical FPS; CPU normalized across logical processors";
+        "p95/p99 are GUI tick intervals; presentP95/P99 and 1% low use distinct-content render-thread frameSwapped timestamps, not optical FPS; renderWait includes beginFrame/backpressure, renderCpu includes sync/record, renderSubmit includes endFrame/Present; CPU normalized across logical processors";
     if (overlay_) {
         const auto rect = overlay_->geometry();
         metrics_["overlayRect"] = QVariantList{rect.x(), rect.y(), rect.width(), rect.height()};

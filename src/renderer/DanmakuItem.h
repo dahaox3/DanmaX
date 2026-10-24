@@ -11,7 +11,7 @@ class DanmakuItem : public QQuickItem {
   public:
     explicit DanmakuItem(QQuickItem* parent = nullptr);
     bool configure(const QVariantMap& settings); // Whether live geometry needs remeasurement.
-    void present(const danmaku::Engine& engine);
+    void present(const danmaku::Engine& engine, double scrollingPixelsPerSecond = 0);
     void clearContent(); // GUI state only; the window releases scene-graph resources.
     void invalidateLayoutCache();
     danmaku::Engine::Extent measure(const danmaku::Item& item);
@@ -19,6 +19,8 @@ class DanmakuItem : public QQuickItem {
     int snapshotCount() const { return static_cast<int>(visuals_.size()); }
     quint64 firstSnapshotId() const { return visuals_.empty() ? 0 : visuals_.front().id; }
     double firstSnapshotX() const { return visuals_.empty() ? 0 : visuals_.front().x; }
+    double firstRenderedX() const { return firstRenderedX_.load(); }
+    double snapshotAgeMs() const { return snapshotAgeMs_.load(); }
     double firstSnapshotFontSize() const { return visuals_.empty() ? 0 : visuals_.front().layout->font().pixelSize(); }
     bool imageBackend() const { return imageBackend_; }
     int imageNodeCount() const { return imageNodes_.load(); }
@@ -49,6 +51,7 @@ class DanmakuItem : public QQuickItem {
         double x{}, y{};
         QRgb color{};
         std::shared_ptr<QTextLayout> layout;
+        bool scrolling{};
     };
     Layout* layout(const danmaku::Item& item);
     QFont font_;
@@ -59,6 +62,9 @@ class DanmakuItem : public QQuickItem {
     // Keep the public Qt text path available for comparison and budget fallbacks.
     const bool imageBackend_{qEnvironmentVariable("DANMAKU_RENDER_BACKEND") != "text"};
     std::atomic<int> imageNodes_{};
+    std::atomic<double> firstRenderedX_{}, snapshotAgeMs_{};
+    qint64 snapshotTimestamp_{};
+    double scrollingPixelsPerSecond_{};
     std::atomic<qint64> textureBytes_{};
     std::atomic<int> sceneEntries_{};
     std::atomic<qint64> textureBudgetBytes_{}, textureDemandBytes_{};

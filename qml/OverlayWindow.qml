@@ -56,6 +56,8 @@ Window {
                 + "\n" + I18n.format(I18n.overlay.activeDanmakuFormat, overlay.backend.metrics.active || 0, overlay.backend.metrics.dropped || 0)
                 + "\n" + I18n.format(I18n.overlay.frequencyFormat, Number(overlay.backend.metrics.presentedPerSecond || 0).toFixed(1), Number(overlay.backend.metrics.updatesPerSecond || 0).toFixed(1))
                 + "\n" + I18n.format(I18n.overlay.intervalFormat, Number(overlay.backend.metrics.p95Ms || 0).toFixed(1))
+                + "\n" + I18n.format(I18n.overlay.presentationFormat, Number(overlay.backend.metrics.presentP99Ms || 0).toFixed(1),
+                    overlay.backend.metrics.onePercentLowFps ? Number(overlay.backend.metrics.onePercentLowFps).toFixed(1) : "…")
                 + "\n" + I18n.format(I18n.overlay.memoryFormat, Number(overlay.backend.metrics.memoryMiB || 0).toFixed(1))
                 + "\n" + I18n.format(I18n.overlay.textureBudgetFormat, Number((overlay.backend.metrics.textureEstimatedBytes || 0) / 1048576).toFixed(1), Number((overlay.backend.metrics.textureBudgetBytes || 0) / 1048576).toFixed(0))
                 + "\n" + I18n.format(I18n.overlay.fallbackFormat, overlay.backend.metrics.textFallbackNodes || 0, ((overlay.backend.metrics.textureFallbackReasons || {}).capacity || 0))

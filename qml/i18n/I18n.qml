@@ -401,6 +401,7 @@ QtObject {
         activeDanmakuFormat: "在屏 %1 / 丢弃 %2",
         frequencyFormat: "呈现 %1 Hz / 更新 %2 Hz",
         intervalFormat: "更新间隔 P95 %1 ms",
+        presentationFormat: "呈现 P99 %1 ms / 1% low %2 FPS",
         memoryFormat: "内存 %1 MiB",
         textureBudgetFormat: "图片 %1 / 预算 %2 MiB",
         fallbackFormat: "回退 %1 / 容量 %2"

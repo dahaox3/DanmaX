@@ -127,6 +127,8 @@ class DanmaxBridge:
                 for setting, option in (("dataDirectory", "--data-dir"), ("cacheDirectory", "--cache-dir")):
                     if self.config.get(setting):
                         args += [option, self.config[setting]]
+                if self.config.get("diagnosticReport"):
+                    args += ["--report", self.config["diagnosticReport"]]
                 # First launch stays alive as the overlay. Later launches only
                 # forward to it. Never wait for the first process to finish.
                 companion = subprocess.Popen(args, cwd=str(Path(self.config["executable"]).parent),

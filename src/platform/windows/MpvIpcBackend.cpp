@@ -28,11 +28,19 @@ MpvIpcBackend::MpvIpcBackend(QObject* parent) : MediaPlaybackBackend(parent) {
         lastQuery_ = 0;
     });
 }
+MpvIpcBackend::~MpvIpcBackend() { detach(); }
 QString MpvIpcBackend::bind(const QVariantMap& d) {
     const auto error = ExternalSessionDescriptor::validate(d);
     if (!error.isEmpty()) return error;
     if (descriptor_.value("process") != d.value("process") || descriptor_.value("ipcPipe") != d.value("ipcPipe")) {
         detach(); descriptor_ = d; id_ = ExternalSessionDescriptor::sessionId(d); exited_ = false;
+        const auto p = d.value("process").toMap();
+        processHandle_ = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, p.value("pid").toUInt());
+        FILETIME created{}, exit{}, kernel{}, user{};
+        if (!processHandle_ || !GetProcessTimes(processHandle_, &created, &exit, &kernel, &user)
+            || QString::number((quint64(created.dwHighDateTime) << 32) | created.dwLowDateTime) != p.value("created").toString()) {
+            detach(); return QStringLiteral("目标播放器已经退出");
+        }
     } else descriptor_ = d;
     timer_.start(); maintain();
     return {};
@@ -41,6 +49,7 @@ void MpvIpcBackend::detach() {
     timer_.stop(); socket_.abort(); descriptor_.clear(); id_.clear(); selected_.clear();
     properties_.clear(); buffer_.clear(); path_.clear(); latest_ = {};
     observed_ = lastQuery_ = 0; validPosition_ = false; window_ = 0; rect_ = {}; windowVisible_ = false;
+    if (processHandle_) { CloseHandle(processHandle_); processHandle_ = nullptr; }
 }
 void MpvIpcBackend::select(const QString& id, quint64 generation) {
     selected_ = accepts(id) ? id : QString(); generation_ = generation;
@@ -57,9 +66,7 @@ void MpvIpcBackend::command(const QString& property, int request) {
                       .toJson(QJsonDocument::Compact) + '\n');
 }
 void MpvIpcBackend::maintain() {
-    const auto p = descriptor_.value("process").toMap();
-    if (ExternalSessionDescriptor::processStamp(p.value("pid").toLongLong(), p.value("executable").toString())
-        != p.value("created").toString()) {
+    if (!processHandle_ || WaitForSingleObject(processHandle_, 0) != WAIT_TIMEOUT) {
         if (!exited_) {
             exited_ = true; socket_.abort(); timer_.stop(); windowVisible_ = false; observed_ = 0;
             publish(); emit geometryChanged(); emit processExited();

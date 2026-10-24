@@ -6,6 +6,40 @@
 class RendererTests : public QObject {
     Q_OBJECT
   private slots:
+    void delayedSynchronization_data() {
+        QTest::addColumn<int>("mode");
+        QTest::addColumn<double>("velocity");
+        QTest::newRow("scroll") << 1 << 100.0;
+        QTest::newRow("double-speed") << 1 << 200.0;
+        QTest::newRow("paused") << 1 << 0.0;
+        QTest::newRow("fixed") << 5 << 100.0;
+    }
+    void delayedSynchronization() {
+        QFETCH(int, mode);
+        QFETCH(double, velocity);
+        QQuickWindow window;
+        window.resize(800, 400);
+        DanmakuItem renderer(window.contentItem());
+        renderer.setSize(QSizeF(window.size()));
+        renderer.configure({{"fontFamily", "Microsoft YaHei"}, {"fontSize", 25},
+                            {"strokeWidth", 1}, {"lineSpacing", .2}, {"opacity", 1.0}});
+        danmaku::Engine engine;
+        engine.configure({}, 800, 400);
+        engine.load({{0, static_cast<danmaku::Mode>(mode), "delayed synchronization"}});
+        engine.tick(0, 0, true, [&](const auto& item) { return renderer.measure(item); });
+        renderer.present(engine, velocity);
+        const double x = renderer.firstSnapshotX();
+        // Simulate backpressure between GUI snapshot preparation and scene sync.
+        QTest::qSleep(40);
+        window.show();
+        QTRY_COMPARE(renderer.sceneEntries(), 1);
+        QVERIFY(renderer.snapshotAgeMs() >= 30);
+        const auto correction = mode == 1 ? velocity * std::min(.1, renderer.snapshotAgeMs() / 1000) : 0;
+        QVERIFY(std::abs(renderer.firstRenderedX() - (x - correction)) < .01);
+        QCOMPARE(renderer.firstSnapshotX(), x); // Domain state was not extrapolated.
+        renderer.present(engine); // Pause or seek publishes an exact, frozen snapshot.
+        QTRY_VERIFY(std::abs(renderer.firstRenderedX() - x) < .01);
+    }
     void budgetGrowthAndHysteresis() {
         constexpr auto MiB = TextureBudget::MiB;
         TextureBudget policy;

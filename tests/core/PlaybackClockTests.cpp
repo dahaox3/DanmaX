@@ -1,5 +1,6 @@
 #include "core/PlaybackClock.h"
 #include "core/MediaClock.h"
+#include "core/FramePacer.h"
 #include <cmath>
 #include <chrono>
 #include <iostream>
@@ -13,6 +14,22 @@ int main() {
         return condition;
     };
     bool ok = true;
+    danmaku::FramePacer pacer;
+    pacer.configure(70); pacer.published(0);
+    ok &= check(pacer.delay(0) == 14285715, "Fractional frame period uses nanosecond deadlines");
+    pacer.published(15000000);
+    ok &= check(pacer.delay(15000000) == 13571429, "Late wakeup does not shift every later frame");
+    pacer.published(1000000000);
+    ok &= check(pacer.delay(1000000000) == 14285715, "A long stall skips missed frames");
+    pacer.configure(144); pacer.published(0);
+    for (int i = 1; i < 2000; ++i) {
+        const auto deadline = (std::int64_t(i) * 1000000000 + 143) / 144;
+        pacer.published(deadline + 200000);
+        const auto next = (std::int64_t(i + 1) * 1000000000 + 143) / 144;
+        ok &= check(pacer.delay(deadline + 200000) == next - deadline - 200000, "Pacing phase never accumulates wakeup drift");
+    }
+    pacer.reset(); ok &= check(pacer.delay(1234) == 0, "Resume starts with an immediate frame");
+    pacer.configure(0); pacer.published(1234); ok &= check(pacer.delay(1234) == 0, "Uncapped mode stays display driven");
     clock.advance(20ms);
     ok &= check(clock.position() == 0us, "Initially paused clock must not advance");
     clock.setPaused(false);

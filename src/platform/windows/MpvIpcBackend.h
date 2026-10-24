@@ -9,6 +9,7 @@ class MpvIpcBackend final : public MediaPlaybackBackend {
     Q_OBJECT
   public:
     explicit MpvIpcBackend(QObject* parent = nullptr);
+    ~MpvIpcBackend() override;
     QString bind(const QVariantMap& descriptor);
     void detach();
     bool accepts(const QString& id) const override { return !id_.isEmpty() && id == id_; }
@@ -44,4 +45,5 @@ class MpvIpcBackend final : public MediaPlaybackBackend {
     quintptr window_{};
     QRect rect_;
     MediaSample latest_;
+    void* processHandle_{};
 };

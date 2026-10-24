@@ -9,12 +9,18 @@
 #include <algorithm>
 #include <unordered_map>
 #include <QSet>
+#include <chrono>
+#include <cmath>
 
 struct DanmakuSceneState {
     QSGNode* root{};
     QQuickWindow* window{};
 };
 namespace {
+qint64 snapshotNow() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 struct Entry {
     QSGTransformNode* node{};
     std::shared_ptr<QTextLayout> layout;
@@ -195,7 +201,9 @@ danmaku::Engine::Extent DanmakuItem::measure(const danmaku::Item& item) {
 double DanmakuItem::trackHeight() const {
     return QFontMetricsF(font_).height() * (1 + spacing_) + stroke_ * 2;
 }
-void DanmakuItem::present(const danmaku::Engine& engine) {
+void DanmakuItem::present(const danmaku::Engine& engine, double scrollingPixelsPerSecond) {
+    snapshotTimestamp_ = snapshotNow();
+    scrollingPixelsPerSecond_ = std::isfinite(scrollingPixelsPerSecond) ? scrollingPixelsPerSecond : 0;
     const auto& active = engine.activeSlots();
     // Retire references before reusing slots; only live slots enter the scene snapshot.
     for (auto slot : previousSlots_)
@@ -214,7 +222,7 @@ void DanmakuItem::present(const danmaku::Engine& engine) {
         }
         if (visual.id != a.id) {
             const auto& data = engine.items()[a.item];
-            visual = {a.id, a.x, a.y, 0xff000000 | data.color, layout(data)->text};
+            visual = {a.id, a.x, a.y, 0xff000000 | data.color, layout(data)->text, data.mode == danmaku::Mode::Scroll};
         } else {
             visual.x = a.x;
             visual.y = a.y;
@@ -224,6 +232,12 @@ void DanmakuItem::present(const danmaku::Engine& engine) {
     update();
 }
 QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
+    // beginFrame can block on the compositor/GPU before scene synchronization.
+    // Reproject only the drawn scrolling position to this synchronization time;
+    // admission, collisions, lifetimes and seeks remain owned by the engine.
+    const double age = snapshotTimestamp_ ? std::max(0.0, (snapshotNow() - snapshotTimestamp_) * 1e-9) : 0;
+    snapshotAgeMs_.store(age * 1000);
+    const double correction = scrollingPixelsPerSecond_ * std::min(age, .1);
     auto* root = static_cast<Root*>(old);
     if (visuals_.empty()) {
         delete root;
@@ -322,7 +336,9 @@ QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
         if (!entry.node->firstChild()) addText(entry, window(), stroke_);
         entry.frame = root->frame;
         QMatrix4x4 matrix;
-        matrix.translate(static_cast<float>(visual.x), static_cast<float>(visual.y));
+        const double x = visual.x - (visual.scrolling ? correction : 0);
+        if (&visual == &visuals_.front()) firstRenderedX_.store(x);
+        matrix.translate(static_cast<float>(x), static_cast<float>(visual.y));
         entry.node->setMatrix(matrix);
         if (entry.texture) ++images;
         else if (imageBackend_) {

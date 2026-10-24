@@ -2,6 +2,8 @@
 #include "infrastructure/AnimeMetadataService.h"
 #include "core/DanmakuEngine.h"
 #include "core/MediaClock.h"
+#include "core/FramePacer.h"
+#include "platform/windows/FrameWakeup.h"
 #include "application/DanmakuLibrary.h"
 #include "application/AutomaticDanmaku.h"
 #include "application/VideoOpenService.h"
@@ -27,6 +29,7 @@
 #include <thread>
 #include <functional>
 #include <memory>
+#include <array>
 struct XmlResult;
 class AppController final : public QObject {
     Q_OBJECT
@@ -265,9 +268,15 @@ class AppController final : public QObject {
     ToolbarInputFilter toolbarInputFilter_;
     ToolbarPointerMonitor toolbarPointer_;
     WindowLayerController windowLayers_;
-    QTimer timer_, metricsTimer_, disconnectCleanup_, frameRequestTimer_;
-    QElapsedTimer animationFrameTime_;
+    QTimer timer_, metricsTimer_, disconnectCleanup_;
+    FrameWakeup frameRequestTimer_;
+    danmaku::FramePacer framePacer_;
     QElapsedTimer frameTime_, sampleTime_, foregroundTime_, metricsTime_;
+    QElapsedTimer presentationTime_;
+    std::vector<double> presentationIntervals_;
+    qint64 lastPresentationNs_{};
+    std::vector<std::array<double, 4>> renderTimings_;
+    quint64 lastPresentedTick_{};
     std::jthread loader_;
     std::shared_ptr<XmlResult> pendingLoad_;
     quint64 loadGeneration_{};

@@ -110,6 +110,7 @@ if(DANMAKU_BUILD_APP)
     include(cmake/Anitomy.cmake)
     danmax_require_anitomy()
     add_library(danmaku_runtime STATIC
+        src/platform/windows/FrameWakeup.cpp src/platform/windows/FrameWakeup.h
         src/infrastructure/InstanceBroker.cpp src/infrastructure/InstanceBroker.h
         src/infrastructure/ExternalSessionDescriptor.cpp src/infrastructure/ExternalSessionDescriptor.h
         src/platform/windows/MpvIpcBackend.cpp src/platform/windows/MpvIpcBackend.h
