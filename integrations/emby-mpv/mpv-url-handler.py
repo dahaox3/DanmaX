@@ -32,7 +32,7 @@ def decode_uri(original_uri):
             break
     uri = unquote(uri)
     subtitle = None
-    
+
     # The web player uses mpv-handler://play/<base64-url> (and historically
     # mpv://play/<base64-url>) to avoid exposing URL punctuation.
     if uri.lower().startswith("play/"):
