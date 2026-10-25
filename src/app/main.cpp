@@ -3,6 +3,7 @@
 #include "platform/windows/WindowBackdropController.h"
 #include "infrastructure/AppPaths.h"
 #include "infrastructure/InstanceBroker.h"
+#include "application/MpvProtocolLauncher.h"
 #include <QWKQuick/qwkquickglobal.h>
 #include "version.h"
 #include <QCommandLineParser>
@@ -44,7 +45,8 @@ int main(int argc, char* argv[]) {
     if (!executableLength || executableLength >= 32768)
         return 1;
     const QDir executableDirectory(QFileInfo(QString::fromWCharArray(executablePath)).absolutePath());
-    QString earlyData = executableDirectory.absolutePath(), earlyCache;
+    QString earlyData = executableDirectory.absolutePath(), earlyCache, protocolUri;
+    bool protocolMode = false, protocolArgumentsValid = true;
     const auto resolveData = [&](const QString& value) {
         return value.isEmpty() ? executableDirectory.absolutePath() : QFileInfo(value).absoluteFilePath();
     };
@@ -57,6 +59,10 @@ int main(int argc, char* argv[]) {
         return 1;
     for (int index = 1; index < argumentCount; ++index) {
         const QString argument = QString::fromWCharArray(wideArguments[index]);
+        if (argument == "--mpv-url" && index + 1 < argumentCount) {
+            if (protocolMode || index + 2 != argumentCount) protocolArgumentsValid = false;
+            protocolMode = true; protocolUri = QString::fromWCharArray(wideArguments[++index]);
+        }
         if (argument == "--")
             break;
         if (argument == "--data-dir" && index + 1 < argumentCount)
@@ -69,11 +75,32 @@ int main(int argc, char* argv[]) {
             earlyCache = resolveCache(argument.mid(12));
     }
     LocalFree(wideArguments);
+    // Reject extra arguments introduced by protocol substitution before any
+    // filesystem access (including cache creation on a different location).
+    if (protocolMode && !protocolArgumentsValid) return 2;
     if (earlyCache.isEmpty())
         earlyCache = QDir(earlyData).filePath("cache");
     if (!preparePortableCache(earlyCache)) {
         std::fprintf(stderr, "Cannot prepare portable cache/temporary directory\n");
         return 1;
+    }
+    if (protocolMode) {
+        QCoreApplication host(argc, argv);
+        // Protocol substitution is data, not a general command-line trampoline.
+        const auto args = host.arguments();
+        for (int i = 1; i < args.size(); ++i) {
+            if ((args[i] == "--mpv-url" || args[i] == "--data-dir" || args[i] == "--cache-dir") && i + 1 < args.size()) ++i;
+            else protocolArgumentsValid = false;
+        }
+        if (!protocolArgumentsValid) return 2;
+        MpvProtocolLauncher launcher(earlyData, earlyCache, {});
+        QObject::connect(&launcher, &MpvProtocolLauncher::finished, &host, &QCoreApplication::exit);
+        QObject::connect(&launcher, &MpvProtocolLauncher::error, &host, [](const QString& message) {
+            const auto text = message + QStringLiteral("。请打开 DanmaX → 设置 → MPV 网页接入修复配置。");
+            MessageBoxW(nullptr, reinterpret_cast<LPCWSTR>(text.utf16()), L"DanmaX", MB_OK | MB_ICONWARNING);
+        });
+        QTimer::singleShot(0, &launcher, [&] { launcher.start(protocolUri); });
+        return host.exec();
     }
 #ifdef DANMAKU_STATIC_PORTABLE
     // Select the public D3D11 backend before Qt creates any Quick windows.

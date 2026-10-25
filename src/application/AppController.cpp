@@ -41,6 +41,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
       automatic_(danmaku_.automatic_),
       videoOpen_(this, std::move(videoHooks)),
       players_(dataDirectory, this),
+      mpvIntegration_(dataDirectory, QCoreApplication::applicationFilePath(), this),
       monitor_(this, QDir(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory).filePath("players/vlc")),
       media_(dataDirectory, cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this, &videoOpen_, &players_, &monitor_),
       external_(dataDirectory, cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),

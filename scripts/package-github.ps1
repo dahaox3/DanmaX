@@ -107,10 +107,10 @@ DanmaX Windows x64 · legacy-mpv
 本包保留 mpv 会话选择，包含 Emby 自动外挂、小数字号取整、类内避让、限帧及帧节奏修复。
 首次运行创建个人设置；包内没有服务器 Token、历史设置、日志或缓存。
 
-Emby 接入需要现有 mpv、Python 和已注册的 mpv URL 协议。见 docs/EMBY_MPV.md。
-从本目录启动 PowerShell 7，运行安装器时明确指定解压目录，例如：
-  ./scripts/install-emby-mpv.ps1 -MpvDirectory '你的 mpv 目录' -PrivateProfile '你的私密配置.json' -RuntimeDirectory (Get-Location).Path
-安装器会备份现有脚本。请勿把私密配置上传到 GitHub。
+Emby 接入：设置 → MPV 网页接入 → 配置接入，选择 mpv.exe，填写弹幕服务器和播放器 Token，点击“保存并绑定协议”。
+新入口已集成到 DanmaX.exe，不需要安装 Python 或执行 PowerShell 安装器。换电脑或移动目录后重新绑定即可。
+已有 Windows 默认应用时，按界面提示选择 DanmaX MPV。原协议已有备份，可从设置还原。
+保留的 Python / PowerShell 脚本仅供旧配置兼容。请勿把私密配置上传到 GitHub。
 
 licenses/ 为第三方许可；官方 VC++ x64 CRT 按 Visual Studio 分发许可随包提供。
 Qt DLL 可以替换；匹配的依赖源码、应用源码与锁定清单见同一 Release 的 sources.zip。
@@ -118,7 +118,7 @@ Qt DLL 可以替换；匹配的依赖源码、应用源码与锁定清单见同�
 '@ | Set-Content -LiteralPath (Join-Path $stage '开始使用.txt') -Encoding utf8
 
 $forbidden = @(Get-ChildItem -LiteralPath $stage -Recurse -Force | Where-Object {
-    $_.Name -in @('settings.ini','external-player.json','external-associations.json','danmax-bridge.json','.git','cache','logs','__pycache__') -or
+    $_.Name -in @('settings.ini','external-player.json','external-associations.json','mpv-protocol-backup.json','danmax-bridge.json','.git','cache','logs','__pycache__') -or
     $_.Extension -in @('.log','.pdb','.pyc')
 })
 if ($forbidden.Count) { throw 'Release staging contains user data or development artifacts.' }
@@ -142,6 +142,7 @@ Get-ChildItem -LiteralPath $output -Filter '*.zip' | ForEach-Object {
 支持 mpv 的 Windows x64 免安装包，由 GitHub Actions 从提交 $commit 编译。
 
 - 保留旧版 mpv 选择与 Emby 点击 MPV 后自动外挂弹幕、关闭清理。
+- 新增“设置 → MPV 网页接入”，可选择 mpv.exe、配置服务器、绑定及还原网页协议，迁移无需 Python。
 - 保留小数字号四舍五入、滚动/固定分类避让与帧率上限。
 - 修复覆盖层重复等待垂直同步导致的帧间隔抖动，增加呈现 P99/1% low 诊断。
 - 运行包包含 Qt/QML、官方 VC++ x64 运行库、许可及通用 Emby 接入脚本。
@@ -150,7 +151,7 @@ Get-ChildItem -LiteralPath $output -Filter '*.zip' | ForEach-Object {
 **$name-sources.zip** 为对应依赖源码、应用源码及重建材料。
 Emby 服务器和 Token 需要自行在本机配置，个人配置不会随包发布。
 
-自动化检查包含 20 项相关 CTest 与部署目录启动检查。云端不验证真实显卡压力或光学帧输出。
+自动化检查包含相关 CTest、MPV 接入配置界面及部署目录启动检查。云端不验证真实显卡压力或光学帧输出。
 SHA-256 见 checksums.txt，编译来源与工具版本见 build-info.json。
 "@ | Set-Content -LiteralPath (Join-Path $output 'release-notes.md') -Encoding utf8
 Write-Host "GitHub release assets ready: $output"

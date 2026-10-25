@@ -25,6 +25,8 @@ PageFrame {
     function put(key, value) { backend.settings.setValue(key, value) }
 
     ExternalPlayerPane { backend: page.backend; Layout.fillWidth: true }
+    MpvIntegrationPane { id: mpvIntegration; objectName: "mpvIntegrationPane"; backend: page.backend; Layout.fillWidth: true }
+    function focusMpvIntegration() { mpvIntegration.manage() }
 
     SettingsSection {
         title: I18n.settings.appearanceSection; Layout.fillWidth: true

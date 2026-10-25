@@ -545,6 +545,56 @@ private slots:
         for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) loadErrors << error.toString();
         QVERIFY2(warnings.isEmpty(), qPrintable(loadErrors.join('\n'))); window->close();
     }
+    void mpvIntegrationConfigurationWorkflow() {
+        QTemporaryDir directory;
+        AppController backend(directory.path());
+        qobject_cast<SettingsStore*>(backend.settings())->setDanmakuServers({});
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        window->setProperty("selectedPage", 3); window->resize(800, 650); window->show(); window->requestActivate();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* pane = window->findChild<QObject*>("mpvIntegrationPane"); QVERIFY(pane);
+        auto* dialog = window->findChild<QObject*>("mpvIntegrationDialog"); QVERIFY(dialog);
+        auto* input = window->findChild<QQuickItem*>("mpvIntegrationPath"); QVERIFY(input);
+        auto* secret = window->findChild<QQuickItem*>("mpvIntegrationToken"); QVERIFY(secret);
+        auto* viewport = window->findChild<QQuickItem*>("mpvIntegrationViewport"); QVERIFY(viewport);
+        auto* bar = window->findChild<QQuickItem*>("mpvIntegrationScrollBar"); QVERIFY(bar);
+        for (const int width : {800, 520}) {
+            window->resize(width, 600);
+            QVERIFY(QMetaObject::invokeMethod(pane, "manage")); QTRY_VERIFY(dialog->property("opened").toBool());
+            const auto artifacts = qEnvironmentVariable("DANMAX_MPV_UI_ARTIFACTS");
+            if (!artifacts.isEmpty()) QVERIFY(window->grabWindow().save(artifacts + "-open-" + QString::number(width) + ".png"));
+            QCOMPARE(secret->property("echoMode").toInt(), 2); // Password input; saved token is never returned to QML.
+            secret->forceActiveFocus(); QCoreApplication::processEvents();
+            if (!artifacts.isEmpty()) {
+                QFile state(artifacts + "-focus.json");
+                if (state.open(QIODevice::WriteOnly)) state.write(QJsonDocument(QJsonObject{{"width", width},
+                    {"rootActive", window->isActive()}, {"tokenActive", secret->hasActiveFocus()}, {"tokenFocus", secret->hasFocus()},
+                    {"sameWindow", secret->window() == window}, {"tokenY", secret->mapToItem(viewport, QPointF()).y()},
+                    {"contentY", viewport->property("contentY").toDouble()}, {"viewportHeight", viewport->height()},
+                    {"contentHeight", viewport->property("contentHeight").toDouble()}}).toJson());
+            }
+            const auto inputVisible = [&] {
+                const auto y = secret->mapToItem(viewport, QPointF()).y();
+                return y >= -1 && y + secret->height() <= viewport->height() + 1;
+            };
+            QTRY_VERIFY(inputVisible());
+            auto* issue = window->findChild<QQuickItem*>("mpvIntegrationIssue"); QVERIFY(issue);
+            auto* save = window->findChild<QQuickItem*>("saveMpvIntegration"); QVERIFY(save);
+            save->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+            QTRY_VERIFY(dialog->property("opened").toBool());
+            QTRY_VERIFY(issue->isVisible());
+            QVERIFY(!QFileInfo::exists(directory.filePath("external-player.json")));
+            if (!artifacts.isEmpty()) QVERIFY(window->grabWindow().save(artifacts + '-' + QString::number(width) + ".png"));
+            QTest::keyClick(window, Qt::Key_Escape); QTRY_VERIFY(!dialog->property("visible").toBool());
+            QCOMPARE(secret->property("text").toString(), QString());
+        }
+        QCOMPARE(warnings.size(), 0);
+    }
     void externalPlayerConfigurationWorkflow() {
         QTemporaryDir directory;
         AppController backend(directory.path());

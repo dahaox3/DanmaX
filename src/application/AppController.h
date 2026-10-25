@@ -13,6 +13,7 @@
 #include "application/NowPlayingModel.h"
 #include "application/ExternalPlaybackSession.h"
 #include "infrastructure/ExternalPlayerStore.h"
+#include "infrastructure/MpvIntegration.h"
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
 #include "platform/windows/MediaMonitor.h"
@@ -44,6 +45,7 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* nowPlaying READ nowPlaying CONSTANT)
     Q_PROPERTY(QObject* externalPlayback READ externalPlayback CONSTANT)
     Q_PROPERTY(QObject* players READ players CONSTANT)
+    Q_PROPERTY(QObject* mpvIntegration READ mpvIntegration CONSTANT)
     Q_PROPERTY(QObject* metadata READ metadata CONSTANT)
     Q_PROPERTY(QObject* uiPreferences READ uiPreferences CONSTANT)
     Q_PROPERTY(QObject* toolbarPointer READ toolbarPointer CONSTANT)
@@ -99,6 +101,7 @@ class AppController final : public QObject {
     QObject* externalPlayback() { return &external_; }
     QString openExternalSession(const QString& file) { return external_.open(file); }
     QObject* players() { return &players_; }
+    QObject* mpvIntegration() { return &mpvIntegration_; }
     QObject* metadata() { return &metadata_; }
     QObject* uiPreferences() { return &uiPreferences_; }
     QObject* toolbarPointer() { return &toolbarPointer_; }
@@ -243,6 +246,7 @@ class AppController final : public QObject {
     AutomaticDanmaku& automatic_;
     VideoOpenService videoOpen_;
     ExternalPlayerStore players_;
+    MpvIntegration mpvIntegration_;
     bool bindingVideo_{};
     bool automaticCommit_{}, automaticSource_{};
     SystemUiPreferences uiPreferences_;

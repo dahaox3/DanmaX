@@ -10,12 +10,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/2CHariko/DanmaX/releases"><img src="https://img.shields.io/badge/Release-v0.2.4-blue.svg?style=flat-square" alt="Release: v0.2.4" /></a>
+  <a href="https://github.com/dahaox3/DanmaX/releases"><img src="https://img.shields.io/badge/Release-v0.2.5-blue.svg?style=flat-square" alt="Release: v0.2.5" /></a>
   <img src="https://img.shields.io/badge/Language-C%2B%2B20-blue.svg?style=flat-square" alt="C++20" />
   <img src="https://img.shields.io/badge/GUI-Qt%206.11%20Quick-41CD52.svg?style=flat-square" alt="Qt 6.11" />
   <img src="https://img.shields.io/badge/Platform-Windows%20x64-0078D6.svg?style=flat-square" alt="Windows x64" />
   <img src="https://img.shields.io/badge/Style-Qt_FluentWinUI3-005FB8.svg?style=flat-square" alt="Qt 官方 FluentWinUI3" />
-  <img src="https://img.shields.io/badge/Package-Static%20Single--EXE-orange.svg?style=flat-square" alt="Static EXE" />
+  <img src="https://img.shields.io/badge/Package-Portable%20ZIP-orange.svg?style=flat-square" alt="Portable ZIP" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-blue.svg?style=flat-square" alt="License: GPL-3.0" /></a>
 </p>
 
@@ -26,6 +26,8 @@
 本 fork 的默认分支 `legacy-mpv` 基于旧版 `554c74a`（2026-10-17），保留通用 SMTC 媒体会话选择，可继续从播放器列表选择 mpv；在此基础上加入 XML 小数字号取整、滚动／固定分类避让和可调帧率上限。使用入口及验证范围见 [旧版 mpv 分支说明](docs/LEGACY_MPV.md)。
 
 Windows 编译包由 [GitHub Actions](../../actions/workflows/windows-release.yml) 生成；推送 `legacy-mpv-v*` 标签后自动发布运行 ZIP、对应源码材料和 SHA-256，详见 [云端发布说明](docs/GITHUB_RELEASE.md)。
+
+**Emby 网页一键 MPV（0.2.5 起）：**完整解压运行包，在 **设置 → MPV 网页接入 → 配置接入** 选择 `mpv.exe`，填写弹幕服务器地址和播放器 Token，然后点击 **保存并绑定协议**。启动器已集成在 DanmaX 内，不需要 Python；换电脑或移动目录后重新选择、绑定即可。支持原协议备份与还原，详见 [接入与迁移说明](docs/EMBY_MPV.md)。
 
 **DanmaX** 是一款专为 Windows 平台打造的原生高性能外挂弹幕工具。它能够将弹幕以完全鼠标穿透、自适应刷新率、低系统资源开销的方式，悬浮置顶在任意本地视频播放器（如 PotPlayer、MPC-HC、VLC、mpv 等）或网页浏览器之上。
 
@@ -47,7 +49,7 @@ Windows 编译包由 [GitHub Actions](../../actions/workflows/windows-release.ym
 | 本地与在线双弹幕生态 | 支持流式加载 Bilibili XML 本地弹幕文件，自带非法控制字符清洗与缺色容错；开箱即用支持在线弹幕检索与选集下载，并持久化隔离在本地便携缓存目录中。 |
 | 双窗口解耦与 Fluent 沉浸交互 | 弹幕覆盖层与快捷控制栏物理分离，保障全屏 100% 物理点击穿透；主控制面板采用 Qt 官方 FluentWinUI3 原生控件，支持 Windows 11 Mica 材质、系统深浅色自适应与原生 Snap Layouts 贴靠布局。 |
 | 吸顶快捷悬浮工具栏 | 采用独立原生无激活悬浮窗口，平时自动收起无感知；鼠标移至屏幕顶部中央平滑展开，支持实时进度拖拽、微调时间轴偏移、字号缩放、不透明度调节与一键清屏。 |
-| 真正的绿色便携单 EXE | 基于 MSVC `/MT` 静态编译，Qt、QML 插件与 C++ 运行库完整内置于约 34 MiB 的单个可执行文件中；运行时无解压临时目录，同级自动创建并维护配置文件、日志与弹幕缓存。 |
+| 便携目录发布 | GitHub 编译包随附 Qt/QML 和官方 VC++ 运行库，完整解压即可运行；请保留整个目录。同级创建设置、日志与弹幕缓存，网页 MPV 接入提供图形化配置与当前用户协议绑定。 |
 | 透明的 UTF-8 INI 配置管理 | 首次启动自动生成全中文注释的 `settings.ini` 配置文件（包含 21 项详尽可调参数）；支持运行时防抖原子持久化与内存热生效，配置文件破损自动安全备份。 |
 
 ---
@@ -87,7 +89,7 @@ DanmaX 遵循严格的高内聚、低耦合分层架构设计，各层职责边�
 
 1. **领域核心纯粹性**：`src/core/` 领域核心逻辑仅依赖 C++20 标准库，不引入任何 Qt、QML 或 Windows API 依赖，具备完整的平台独立性与确定性单元测试能力。
 2. **生命周期与线程安全**：GUI 与 Qt Quick 渲染生命周期严格解耦，图形硬件资源仅在场景图更新阶段由渲染线程管理，严禁跨线程操作 QML 对象。
-3. **零外部污染**：所有开发依赖、本地配置、运行缓存与构建产物均严格隔离在项目与便携目录之内，不修改系统注册表或永久系统环境变量。
+3. **明确系统边界**：开发依赖、本地配置、运行缓存与构建产物隔离在项目与便携目录内，不修改永久 PATH。用户主动绑定网页 MPV 协议时只写当前用户注册表，并先备份原绑定。
 
 ---
 

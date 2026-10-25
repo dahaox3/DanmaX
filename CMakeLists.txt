@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.31)
-project(DanmaX VERSION 0.2.4 LANGUAGES CXX)
+project(DanmaX VERSION 0.2.5 LANGUAGES CXX)
 if(MSVC AND DEFINED DANMAKU_MSVC_INCLUDES_PREFIX)
     set(CMAKE_CL_SHOWINCLUDES_PREFIX "${DANMAKU_MSVC_INCLUDES_PREFIX}")
 endif()
@@ -111,6 +111,10 @@ if(DANMAKU_BUILD_APP)
     danmax_require_anitomy()
     add_library(danmaku_runtime STATIC
         src/platform/windows/FrameWakeup.cpp src/platform/windows/FrameWakeup.h
+        src/platform/windows/PrivateJson.cpp src/platform/windows/PrivateJson.h
+        src/platform/windows/MpvProtocolRegistration.cpp src/platform/windows/MpvProtocolRegistration.h
+        src/infrastructure/MpvIntegration.cpp src/infrastructure/MpvIntegration.h
+        src/application/MpvProtocolLauncher.cpp src/application/MpvProtocolLauncher.h
         src/infrastructure/InstanceBroker.cpp src/infrastructure/InstanceBroker.h
         src/infrastructure/ExternalSessionDescriptor.cpp src/infrastructure/ExternalSessionDescriptor.h
         src/platform/windows/MpvIpcBackend.cpp src/platform/windows/MpvIpcBackend.h
@@ -156,7 +160,7 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h
         src/infrastructure/LogModel.cpp src/infrastructure/LogModel.h
         src/infrastructure/ChineseConverter.cpp src/infrastructure/ChineseConverter.h)
-    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi version iphlpapi ws2_32 PRIVATE danmax_anitomy)
+    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi version iphlpapi ws2_32 advapi32 PRIVATE danmax_anitomy)
     qt_add_resources(danmaku_runtime vlc_bridge PREFIX "/vlc"
         BASE "${CMAKE_SOURCE_DIR}/resources/vlc" FILES "${CMAKE_SOURCE_DIR}/resources/vlc/status.json")
     target_include_directories(danmaku_runtime PRIVATE "${CMAKE_BINARY_DIR}/generated")
@@ -219,6 +223,12 @@ if(DANMAKU_BUILD_APP)
         add_executable(video_open_tests tests/runtime/VideoOpenTests.cpp)
         add_executable(vlc_playback_tests tests/runtime/VlcPlaybackTests.cpp)
         add_executable(workflow_session_tests tests/runtime/WorkflowSessionTests.cpp)
+        add_executable(mpv_integration_tests tests/runtime/MpvIntegrationTests.cpp)
+        add_dependencies(mpv_integration_tests danmaku_app)
+        target_link_libraries(mpv_integration_tests PRIVATE danmaku_runtime Qt6::Test)
+        danmaku_compile_options(mpv_integration_tests)
+        add_test(NAME mpv_integration COMMAND mpv_integration_tests -o "${CMAKE_BINARY_DIR}/mpv-integration-tests.txt,txt")
+        set_tests_properties(mpv_integration PROPERTIES TIMEOUT 60)
         target_link_libraries(workflow_session_tests PRIVATE danmaku_runtime Qt6::Test)
         if(DANMAKU_STATIC_QT)
             qt_import_plugins(workflow_session_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin)
