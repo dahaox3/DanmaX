@@ -150,11 +150,14 @@ void DanmakuItem::invalidateLayoutCache() {
 bool DanmakuItem::configure(const QVariantMap& s) {
     QFont font(s["fontFamily"].toString());
     font.setPixelSize(s["fontSize"].toInt());
-    font.setWeight(QFont::DemiBold);
+    font.setWeight(static_cast<QFont::Weight>(s.value("fontWeight", 600).toInt()));
+    const bool uniform = s.value("uniformFontSize", false).toBool();
+    const QColor color(s.value("textColor").toString());
     const int stroke = s["strokeWidth"].toInt();
-    const bool dimensionsChanged = font_ != font || stroke_ != stroke || spacing_ != s["lineSpacing"].toDouble();
-    if (font_ != font) layouts_.clear();
-    if (font_ != font || stroke_ != stroke) {
+    const bool dimensionsChanged = font_ != font || uniformFontSize_ != uniform || stroke_ != stroke || spacing_ != s["lineSpacing"].toDouble();
+    if (font_ != font || uniformFontSize_ != uniform) layouts_.clear();
+    if (font_ != font || uniformFontSize_ != uniform || textColor_ != color || stroke_ != stroke) {
+        uniformFontSize_ = uniform; textColor_ = color;
         font_ = font;
         stroke_ = stroke;
         // Keep the current snapshot alive until present() atomically replaces it.
@@ -175,7 +178,7 @@ QVariantMap DanmakuItem::textureFallbackReasons() const {
 }
 DanmakuItem::Layout* DanmakuItem::layout(const danmaku::Item& item) {
     QFont font = font_;
-    font.setPixelSize(std::max(1, qRound(font_.pixelSize() * std::clamp(item.fontSize, 1, 200) / 25.0)));
+    font.setPixelSize(uniformFontSize_ ? font_.pixelSize() : std::max(1, qRound(font_.pixelSize() * std::clamp(item.fontSize, 1, 200) / 25.0)));
     const auto content = QString::fromUtf8(item.text.data(), static_cast<qsizetype>(item.text.size()));
     const auto key = QString::number(font.pixelSize()) + QChar(0) + content;
     if (auto* found = layouts_.object(key)) {
@@ -222,7 +225,8 @@ void DanmakuItem::present(const danmaku::Engine& engine, double scrollingPixelsP
         }
         if (visual.id != a.id) {
             const auto& data = engine.items()[a.item];
-            visual = {a.id, a.x, a.y, 0xff000000 | data.color, layout(data)->text, data.mode == danmaku::Mode::Scroll};
+            visual = {a.id, a.x, a.y, textColor_.isValid() ? textColor_.rgba() : 0xff000000 | data.color,
+                      layout(data)->text, data.mode == danmaku::Mode::Scroll};
         } else {
             visual.x = a.x;
             visual.y = a.y;

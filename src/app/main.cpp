@@ -4,6 +4,7 @@
 #include "infrastructure/AppPaths.h"
 #include "infrastructure/InstanceBroker.h"
 #include "application/MpvProtocolLauncher.h"
+#include "infrastructure/ExternalSessionDescriptor.h"
 #include <QWKQuick/qwkquickglobal.h>
 #include "version.h"
 #include <QCommandLineParser>
@@ -135,6 +136,10 @@ int main(int argc, char* argv[]) {
     parser.addOption({"media-session", "Select a real SMTC session (read only)", "id"});
     parser.addOption({"file", "Load an XML file on startup", "path"});
     parser.addOption({"external-session", "Attach an Emby-launched mpv session", "path"});
+    parser.addOption({"mpv-xml", "Display local XML alongside an existing mpv", "path"});
+    parser.addOption({"mpv-pid", "Target mpv process ID", "pid"});
+    parser.addOption({"mpv-pipe", "Target mpv IPC pipe", "pipe"});
+    parser.addOption({"mpv-entry", "Target mpv playlist entry ID", "id"});
     parser.addOption({"page", "Initial page: home, player, logs, settings, about", "page", "home"});
     parser.addOption({"source-tab", "Initial player source tab: xml, cache (UI validation)", "tab", "xml"});
     parser.addOption({"online-search", "Open online danmaku search on the home page (UI validation)"});
@@ -151,9 +156,16 @@ int main(int argc, char* argv[]) {
         const auto paths =
             AppPaths::prepare(app.applicationFilePath(), parser.value("data-dir"), parser.value("cache-dir"));
         InstanceBroker broker(paths.data);
-        bool autoOnly = parser.isSet("external-session");
-        const QVariantMap message{{"version", 1}, {"action", autoOnly ? "attach" : "show"},
+        bool autoOnly = parser.isSet("external-session") || parser.isSet("mpv-xml");
+        QVariantMap message{{"version", 1}, {"action", autoOnly ? "attach" : "show"},
                                   {"file", QFileInfo(parser.value("external-session")).absoluteFilePath()}};
+        if (parser.isSet("mpv-xml")) {
+            QString error;
+            const auto descriptor = ExternalSessionDescriptor::localXml(parser.value("mpv-pid").toLongLong(),
+                parser.value("mpv-pipe"), parser.value("mpv-xml"), parser.value("mpv-entry"), error);
+            if (!error.isEmpty()) throw std::runtime_error(error.toStdString());
+            message = {{"version", 1}, {"action", "local-xml"}, {"descriptor", descriptor}};
+        }
         const bool isolated = parser.isSet("smoke-test") || parser.isSet("benchmark");
         QString brokerError;
         if (!isolated && !broker.claim(message, brokerError)) {
@@ -163,6 +175,8 @@ int main(int argc, char* argv[]) {
         qmlRegisterType<DanmakuItem>("DanmaX.Native", 1, 0, "DanmakuCanvas");
         AppController controller(paths.data, nullptr, {}, paths.cache);
         broker.receive = [&](const QVariantMap& request) -> QString {
+            if (request.value("action") == "local-xml")
+                return qobject_cast<ExternalPlaybackSession*>(controller.externalPlayback())->openLocalXml(request.value("descriptor").toMap());
             if (request.value("action") == "attach") return controller.openExternalSession(request.value("file").toString());
             if (request.value("action") == "show") { autoOnly = false; app.setQuitOnLastWindowClosed(true); controller.showMainWindow(); return {}; }
             return QStringLiteral("不支持的会话操作");
@@ -227,7 +241,7 @@ int main(int argc, char* argv[]) {
         QObject::connect(qobject_cast<ExternalPlaybackSession*>(controller.externalPlayback()), &ExternalPlaybackSession::choiceCancelled,
                          mainWindow, [&] { if (autoOnly) mainWindow->hide(); });
         QTimer externalReport;
-        if (parser.isSet("external-session") && parser.isSet("report")) {
+        if (autoOnly && parser.isSet("report")) {
             externalReport.setInterval(500);
             QObject::connect(&externalReport, &QTimer::timeout, &controller,
                              [&] { controller.writeReport(parser.value("report")); });
@@ -241,7 +255,9 @@ int main(int argc, char* argv[]) {
         else {
             app.setQuitOnLastWindowClosed(false);
             QTimer::singleShot(0, &controller, [&] {
-                const auto error = controller.openExternalSession(parser.value("external-session"));
+                const auto error = parser.isSet("mpv-xml")
+                    ? qobject_cast<ExternalPlaybackSession*>(controller.externalPlayback())->openLocalXml(message.value("descriptor").toMap())
+                    : controller.openExternalSession(parser.value("external-session"));
                 if (!error.isEmpty()) { qWarning("External session rejected"); app.exit(2); }
             });
         }

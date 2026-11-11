@@ -3,3 +3,4 @@
 
 # SVG bytes are pinned by the Fluent asset SHA-256 manifest.
 resources/fluent/*.svg -text
+third_party/mpv/client.h -text

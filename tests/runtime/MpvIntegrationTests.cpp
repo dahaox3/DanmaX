@@ -110,6 +110,24 @@ class FakeEmby : public QTcpServer {
 class MpvIntegrationTests : public QObject {
     Q_OBJECT
   private slots:
+    void installLocalXmlCompanion() {
+        QTemporaryDir dir; const auto mpv = makeMpv(dir.path()); QVERIFY(!mpv.isEmpty());
+        const auto oldHome = qgetenv("MPV_HOME"); qputenv("MPV_HOME", dir.filePath("mpv-config").toUtf8());
+        const auto restore = qScopeGuard([&] { if (oldHome.isNull()) qunsetenv("MPV_HOME"); else qputenv("MPV_HOME", oldHome); });
+        MpvIntegration integration(dir.path(), QDir(QCoreApplication::applicationDirPath()).filePath("DanmaX.exe"));
+        QVERIFY2(integration.installXmlDrop(mpv), qPrintable(integration.error()));
+        const QDir target(dir.filePath("mpv-config/scripts/danmax_drop"));
+        QVERIFY(QFileInfo::exists(target.filePath("danmax_mpv_drop.dll")));
+        QFile config(target.filePath("config.json")); QVERIFY(config.open(QIODevice::ReadOnly));
+        const auto json = QJsonDocument::fromJson(config.readAll()).object(); config.close();
+        QCOMPARE(json.value("dataDirectory").toString(), dir.path()); QVERIFY(!json.contains("token"));
+        QVERIFY2(integration.installXmlDrop(mpv), qPrintable(integration.error()));
+        QVERIFY(!QDir(dir.filePath("backups")).entryList(QDir::Dirs | QDir::NoDotAndDotDot).isEmpty());
+        QVERIFY(config.open(QIODevice::WriteOnly | QIODevice::Truncate)); config.write("{}"); config.close();
+        QVERIFY(!integration.installXmlDrop(mpv)); QVERIFY(integration.error().contains(QStringLiteral("其他内容")));
+        // Installation does not require or write server credentials/protocol bindings.
+        QVERIFY(!QFileInfo::exists(dir.filePath("external-player.json")));
+    }
     void protocolDecoding() {
         const auto video = QStringLiteral("http://example.test/videos/123/stream.mkv?api_key=fixture&note=x%26y");
         const auto sub = QStringLiteral("https://example.test/subtitle.ass?x=1&y=2");

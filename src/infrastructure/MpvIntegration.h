@@ -31,11 +31,12 @@ class MpvIntegration final : public QObject {
     Q_INVOKABLE bool bindProtocols();
     Q_INVOKABLE bool restoreProtocols();
     Q_INVOKABLE void openDefaultApps();
+    Q_INVOKABLE bool installXmlDrop(const QString& mpv);
   signals:
     void changed();
   private:
     bool reject(const QString& error);
-    QString data_, error_, notice_;
+    QString data_, executable_, error_, notice_;
     QJsonObject config_;
     bool readable_{true};
     MpvProtocolRegistration protocols_;

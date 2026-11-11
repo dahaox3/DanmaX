@@ -11,6 +11,7 @@
 #include <QLocale>
 #include <QSaveFile>
 #include <QSettings>
+#include <QRegularExpression>
 #include <QStringDecoder>
 #include <QStyleHints>
 #include <cmath>
@@ -23,6 +24,13 @@ struct Setting {
 };
 const QList<Setting>& schema() {
     static const QList<Setting> fields{
+        {"LocalXmlStyle", "localXmlFontFamily", "Microsoft YaHei", "拖入 mpv 的本地 XML 专用字体，不影响服务器弹幕。"},
+        {"LocalXmlStyle", "localXmlFontSize", 32, "本地 XML 统一字号，整数 10～72；忽略源文件大小，默认 32。"},
+        {"LocalXmlStyle", "localXmlBold", true, "本地 XML 使用粗体，默认 true。"},
+        {"LocalXmlStyle", "localXmlStrokeWidth", 1, "本地 XML 描边宽度，整数 0～6，默认 1。"},
+        {"LocalXmlStyle", "localXmlOpacity", 0.85, "本地 XML 不透明度，0.05～1，默认 0.85。"},
+        {"LocalXmlStyle", "localXmlUseSourceColor", true, "本地 XML 保留源颜色；关闭后使用 localXmlColor。"},
+        {"LocalXmlStyle", "localXmlColor", "#FFFFFF", "本地 XML 自定义文字颜色，#RRGGBB。"},
         {"Home", "homeShowChineseAnime", false, "首页显示国漫：true=显示，false=隐藏已识别的国漫，默认：false。仅影响首页推荐、追番周历与高分榜，不影响搜索与本地缓存；地区未知或冲突时保留。"},
         {"Online", "danmakuServers", QStringList{"https://danmaku-api.152468.xyz"},
          "有序兼容服务地址列表，使用 JSON 数组字符串；空数组禁用在线服务。\n默认：https://danmaku-api.152468.xyz。失败或无结果时顺序回退，共享弹弹play ID。\n支持 http/https 和路径前缀，不包含 /api/v2、查询参数或账号密码。旧 danmakuServer 不读取。"},
@@ -98,6 +106,7 @@ QVariant checked(const QString& key, const QVariant& value, const QVariant& fall
         return servers;
     }
     static const QMap<QString, QPair<double, double>> ranges{
+        {"localXmlFontSize", {10, 72}}, {"localXmlStrokeWidth", {0, 6}}, {"localXmlOpacity", {0.05, 1}},
         {"fontSize", {10, 72}},   {"strokeWidth", {0, 6}},   {"opacity", {0.05, 1}},
         {"speed", {30, 1500}},    {"fixedSeconds", {1, 30}}, {"maxActive", {50, 5000}},
         {"maxTracks", {1, 60}},   {"lineSpacing", {0, 2}},   {"timeOffset", {-120, 120}},
@@ -126,7 +135,8 @@ QVariant checked(const QString& key, const QVariant& value, const QVariant& fall
         return {};
     if (key == "logLevel" && !QStringList{"DEBUG", "INFO", "WARNING", "ERROR"}.contains(text))
         return {};
-    if (text.size() > 4096 || (key == "fontFamily" && text.trimmed().isEmpty()))
+    if (key == "localXmlColor" && !QRegularExpression("^#[0-9A-Fa-f]{6}$").match(text).hasMatch()) return {};
+    if (text.size() > 4096 || ((key == "fontFamily" || key == "localXmlFontFamily") && text.trimmed().isEmpty()))
         return {};
     return text;
 }

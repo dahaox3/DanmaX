@@ -39,6 +39,7 @@ ExternalPlaybackSession::ExternalPlaybackSession(const QString& data, const QStr
     connect(app_->monitor_.mpv(), &MpvIpcBackend::contentChanged, this, &ExternalPlaybackSession::contentChanged);
 }
 QString ExternalPlaybackSession::title() const {
+    if (localXml()) return QFileInfo(localFile_).fileName();
     if (emby_.value("seriesTitle").toString().isEmpty()) return emby_.value("title").toString();
     return emby_.value("seriesTitle").toString() + QStringLiteral(" S%1E%2 · ")
         .arg(emby_.value("season").toInt(), 2, 10, QLatin1Char('0'))
@@ -77,12 +78,18 @@ bool ExternalPlaybackSession::loadProfile() {
 QString ExternalPlaybackSession::open(const QString& file) {
     QString error; const auto d = ExternalSessionDescriptor::read(file, error);
     if (!error.isEmpty()) return error;
+    if (d.contains("localXml")) return openLocalXml(d);
     const auto created = d.value("process").toMap().value("created").toULongLong();
     const auto revision = d.value("revision").toLongLong();
     if (created < newestProcess_ || (created == newestProcess_ && revision <= revision_)) return {};
     // Reject obsolete launches even after the newest player has closed.
     newestProcess_ = created; revision_ = revision;
     const bool sameProcess = descriptor_.value("process") == d.value("process");
+    // A delayed Emby lookup must not replace an explicitly dropped local source.
+    if (sameProcess && localXml() && active_ && contentReady_
+        && (emby_.value("itemId").toString().isEmpty() || emby_.value("itemId") == d.value("emby").toMap().value("itemId"))) {
+        emby_ = d.value("emby").toMap(); return {};
+    }
     const auto oldPath = contentPath_;
     app_->handoff(PlaybackCoordinator::External);
     descriptor_ = d; emby_ = d.value("emby").toMap();
@@ -97,12 +104,14 @@ QString ExternalPlaybackSession::open(const QString& file) {
     return {};
 }
 void ExternalPlaybackSession::deactivate() {
+    localLoader_.request_stop(); localResult_.reset(); localFile_.clear(); localEntry_.clear();
     ++epoch_; active_ = contentReady_ = false; phase_ = Idle;
     library_.cancel(); metadata_.clear(); sample_ = {};
     app_->monitor_.mpv()->detach(); emit changed();
 }
 void ExternalPlaybackSession::resolve() {
     if (!active_ || !contentReady_) return;
+    if (localXml()) { loadLocalXml(); return; }
     error_.clear(); loadError_.clear(); cacheTried_ = false;
     const auto exact = associations_.value(exactKey()).toMap();
     const auto series = associations_.value(seasonKey()).toMap();
@@ -131,7 +140,7 @@ void ExternalPlaybackSession::offer(const QString& reason) {
     emit changed(); emit showChoice();
 }
 void ExternalPlaybackSession::advance() {
-    if (!active_ || advancing_ || library_.busy() || phase_ == Idle || phase_ == Ready) return;
+    if (localXml() || !active_ || advancing_ || library_.busy() || phase_ == Idle || phase_ == Ready) return;
     QScopedValueRollback guard(advancing_, true);
     if (!library_.error().isEmpty()) {
         if (loadError_.isEmpty()) loadError_ = library_.error();
@@ -181,7 +190,7 @@ void ExternalPlaybackSession::advance() {
 }
 void ExternalPlaybackSession::accept() {
     const auto result = library_.takeReadyResult();
-    if (!active_ || !contentReady_ || stopped_ || !result) return;
+    if (localXml() || !active_ || !contentReady_ || stopped_ || !result) return;
     const bool fallback = phase_ == Cached;
     metadata_ = result->metadata;
     phase_ = Ready;
@@ -219,6 +228,15 @@ void ExternalPlaybackSession::saveAssociation() {
 void ExternalPlaybackSession::observe(const MediaSample& sample) {
     if (!active_ || sample.id != bound_) return;
     sample_ = sample;
+    if (localXml()) {
+        const auto entry = app_->monitor_.mpv()->playlistEntryId();
+        if (!entry.isEmpty() && entry != localEntry_) {
+            ++epoch_; localLoader_.request_stop(); localResult_.reset(); localFile_.clear(); localEntry_.clear();
+            library_.cancel(); contentReady_ = false; phase_ = Idle; app_->clearMediaItems();
+            status_ = QStringLiteral("mpv 已换片，请拖入新视频的 XML 弹幕"); emit changed(); return;
+        }
+        presentLocalXml();
+    }
     if (sample.playback == MediaSample::Playback::Stopped && !stopped_ && !cancelled_) {
         stopped_ = true; library_.cancel(); app_->clearMediaItems();
         status_ = QStringLiteral("视频已停止，弹幕已清除"); emit changed();
@@ -231,6 +249,8 @@ void ExternalPlaybackSession::contentChanged(const QString& path) {
     if (!active_) return;
     if (contentPath_.isEmpty()) { contentPath_ = path; return; }
     if (path == contentPath_) return;
+    const bool wasLocal = localXml();
+    localLoader_.request_stop(); localResult_.reset(); localFile_.clear(); localEntry_.clear();
     contentPath_ = path;
     ++epoch_; contentReady_ = false; phase_ = Choice; library_.clearSelection(); metadata_.clear();
     emby_.clear(); emby_["title"] = QFileInfo(QUrl(path).path()).fileName().left(512);
@@ -239,9 +259,10 @@ void ExternalPlaybackSession::contentChanged(const QString& path) {
     // The launcher sends a new revision for identifiable Emby URLs. Other files
     // can still use the manual source picker, but must never inherit old XML.
     const auto epoch = epoch_;
-    QTimer::singleShot(3000, this, [this, epoch] { if (active_ && epoch == epoch_ && !contentReady_) emit showChoice(); });
+    if (!wasLocal) QTimer::singleShot(3000, this, [this, epoch] { if (active_ && epoch == epoch_ && !contentReady_) emit showChoice(); });
 }
 void ExternalPlaybackSession::cancelChoice() {
+    ++epoch_; localLoader_.request_stop(); localResult_.reset();
     library_.cancel(); phase_ = Idle; stopped_ = cancelled_ = true; app_->clearMediaItems();
     status_ = QStringLiteral("本次弹幕已取消，视频继续播放"); emit changed();
     emit choiceCancelled();
@@ -249,13 +270,65 @@ void ExternalPlaybackSession::cancelChoice() {
 void ExternalPlaybackSession::retry() {
     if (!active_) return;
     ++epoch_; stopped_ = cancelled_ = false; library_.clearSelection();
+    if (localXml()) { loadLocalXml(); return; }
     if (!loadProfile()) { offer(QStringLiteral("请检查自动弹幕服务配置后重试")); return; }
     contentReady_ = true; resolve();
 }
 void ExternalPlaybackSession::chooseSource() {
     if (!active_) return;
+    localLoader_.request_stop(); localResult_.reset(); localFile_.clear(); localEntry_.clear();
     ++epoch_; stopped_ = cancelled_ = false; contentReady_ = true; library_.clearSelection(); metadata_.clear();
     loadError_.clear();
     phase_ = Choice; library_.searchAnime(searchTitle()); emit changed(); emit showChoice();
 }
 void ExternalPlaybackSession::stop() { cancelChoice(); }
+
+ExternalPlaybackSession::~ExternalPlaybackSession() { localLoader_.request_stop(); }
+QString ExternalPlaybackSession::openLocalXml(const QVariantMap& d) {
+    const auto issue = ExternalSessionDescriptor::validate(d);
+    if (!issue.isEmpty() || !d.contains("localXml")) return issue.isEmpty() ? QStringLiteral("缺少 XML 文件") : issue;
+    const bool same = active_ && descriptor_.value("process") == d.value("process");
+    const auto oldEmby = same ? emby_ : QVariantMap{};
+    app_->handoff(PlaybackCoordinator::External);
+    descriptor_ = d; emby_ = oldEmby; bound_ = ExternalSessionDescriptor::sessionId(d);
+    localFile_ = d.value("localXml").toString(); localEntry_ = d.value("playlistEntryId").toString();
+    contentPath_.clear(); contentReady_ = active_ = true; stopped_ = cancelled_ = false;
+    newestProcess_ = std::max(newestProcess_, d.value("process").toMap().value("created").toULongLong());
+    const auto error = app_->monitor_.mpv()->bind(d);
+    if (!error.isEmpty()) { deactivate(); return error; }
+    app_->bindMedia(bound_); loadLocalXml(); return {};
+}
+void ExternalPlaybackSession::loadLocalXml() {
+    const auto epoch = ++epoch_; localLoader_.request_stop();
+    localResult_.reset(); library_.cancel(); phase_ = Loading; error_.clear(); metadata_.clear();
+    status_ = QStringLiteral("正在读取本地 XML 弹幕…"); emit changed();
+    const auto file = localFile_;
+    localLoader_ = std::jthread([this, file, epoch](std::stop_token token) {
+        auto result = std::make_shared<XmlResult>(readDanmakuXml(file, token));
+        QMetaObject::invokeMethod(this, [this, epoch, result] {
+            if (epoch != epoch_ || !active_ || result->cancelled || !localXml()) return;
+            if (!result->error.isEmpty() || result->items.empty()) {
+                error_ = result->error.isEmpty() ? QStringLiteral("XML 没有可显示的弹幕") : result->error;
+                status_ = error_; phase_ = Idle; app_->fail(error_); app_->showMainWindow(); emit changed(); return;
+            }
+            localResult_ = result; presentLocalXml();
+        }, Qt::QueuedConnection);
+    });
+    QTimer::singleShot(5000, this, [this, epoch] {
+        if (epoch != epoch_ || !localXml() || phase_ != Loading || sample_.found) return;
+        ++epoch_; localLoader_.request_stop(); localResult_.reset(); phase_ = Idle;
+        error_ = status_ = QStringLiteral("未收到目标 mpv 的时间轴，请重新拖入 XML");
+        app_->fail(error_); app_->showMainWindow(); emit changed();
+    });
+}
+void ExternalPlaybackSession::presentLocalXml() {
+    if (!localResult_ || !sample_.found || stopped_ || cancelled_
+        || app_->monitor_.mpv()->playlistEntryId() != localEntry_
+        || (sample_.playback != MediaSample::Playback::Playing && sample_.playback != MediaSample::Playback::Paused)) return;
+    auto result = std::move(localResult_); phase_ = Ready;
+    metadata_ = {{"sourceKind", "localXml"}, {"localFile", localFile_}};
+    status_ = QStringLiteral("已载入 %1 条本地 XML 弹幕，使用已保存的本地样式").arg(result->items.size());
+    app_->presentMedia(std::move(result->items), title(), sample_);
+    app_->monitor_.mpv()->localXmlLoaded(app_->total(), localEntry_);
+    emit changed(); emit sourceAccepted();
+}

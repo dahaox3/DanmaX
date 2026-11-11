@@ -2,10 +2,39 @@
 #include "renderer/TextTextureCache.h"
 #include <QQuickWindow>
 #include <QTest>
+#include "infrastructure/DanmakuStyle.h"
+#include "infrastructure/SettingsStore.h"
+#include <QTemporaryDir>
 
 class RendererTests : public QObject {
     Q_OBJECT
   private slots:
+    void sourceSpecificStyles() {
+        QTemporaryDir dir;
+        {
+            SettingsStore saved(dir.path());
+            QVERIFY(saved.setValue("localXmlFontSize", 42)); QVERIFY(saved.setValue("localXmlBold", false));
+            QVERIFY(saved.setValue("localXmlColor", "#12ABEF")); QVERIFY(saved.setValue("localXmlUseSourceColor", false));
+            QVERIFY(!saved.setValue("localXmlColor", "invalid")); QVERIFY(!saved.setValue("localXmlFontSize", 2));
+            saved.flushPending();
+        }
+        SettingsStore saved(dir.path()); auto settings = saved.values();
+        DanmakuItem renderer;
+        renderer.configure(danmakuStyle(settings, true, true));
+        const danmaku::Item small{0, danmaku::Mode::Scroll, "same text", 0xff0000, 15};
+        auto large = small; large.fontSize = 50;
+        QCOMPARE(renderer.measure(small).height, renderer.measure(large).height);
+        danmaku::Engine engine; engine.configure({}, 800, 400); engine.load({small});
+        engine.tick(0, 0, true, [&](const auto& item) { return renderer.measure(item); }); renderer.present(engine);
+        QCOMPARE(renderer.firstSnapshotFontSize(), 42.0);
+        QCOMPARE(renderer.firstSnapshotColor(), QRgb(0xff12abef));
+        renderer.configure(danmakuStyle(settings, true, false));
+        QVERIFY(renderer.measure(large).height > renderer.measure(small).height);
+        renderer.present(engine); QCOMPARE(renderer.firstSnapshotFontSize(), 15.0);
+        QCOMPARE(renderer.firstSnapshotColor(), QRgb(0xffff0000));
+        const auto server = danmakuStyle(settings, true, false);
+        QVERIFY(!server.value("uniformFontSize").toBool()); QVERIFY(server.value("textColor").toString().isEmpty());
+    }
     void delayedSynchronization_data() {
         QTest::addColumn<int>("mode");
         QTest::addColumn<double>("velocity");

@@ -110,6 +110,7 @@ in static-exe. These materials are not a completed component-by-component licens
     New-Item -ItemType Directory -Force $stage | Out-Null
     Copy-AnitomyMaterials $stage
     Copy-Item -LiteralPath $exe -Destination $stage
+    Copy-Item -LiteralPath (Join-Path (Split-Path $exe) 'mpv-xml') -Destination $stage -Recurse
     Invoke-QtDeployment $stage $tools | Out-Null
     Copy-Item -LiteralPath (Get-ProjectPath 'LICENSE') -Destination $stage
     Copy-Item -LiteralPath (Get-ProjectPath 'docs/THIRD_PARTY.md') -Destination $stage

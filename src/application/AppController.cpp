@@ -1,4 +1,5 @@
 #include "application/AppController.h"
+#include "infrastructure/DanmakuStyle.h"
 #include "infrastructure/XmlLoader.h"
 #include "platform/windows/MpvIpcBackend.h"
 #include <QDir>
@@ -401,10 +402,11 @@ void AppController::configure() {
     }
     const QStringList rendererKeys{"fontFamily", "fontSize", "strokeWidth", "speed", "fixedSeconds",
                                    "maxActive", "maxTracks", "lineSpacing", "overlap", "opacity",
-                                   "textureBudgetAuto", "textureBudgetMiB"};
+                                   "textureBudgetAuto", "textureBudgetMiB", "fontWeight", "uniformFontSize", "textColor"};
+    const auto appearance = danmakuStyle(s, coordinator_.owner() == PlaybackCoordinator::External, external_.localXml());
     bool changed = appliedRendererSettings_.isEmpty();
     for (const auto& key : rendererKeys)
-        if (appliedRendererSettings_.value(key) != s[key]) changed = true;
+        if (appliedRendererSettings_.value(key) != appearance.value(key)) changed = true;
     if (renderer_) {
         changed = changed || (overlay_ && (appliedRendererSettings_.value("width").toInt() != overlay_->width() ||
                                           appliedRendererSettings_.value("height").toInt() != overlay_->height()));
@@ -456,7 +458,7 @@ bool AppController::updatePresentationVisibility(bool forceForeground, bool noti
 void AppController::applyRendererSettings() {
     rendererSettingsPending_ = false;
     if (!renderer_) return;
-    const auto s = settings_.values();
+    const auto s = danmakuStyle(settings_.values(), coordinator_.owner() == PlaybackCoordinator::External, external_.localXml());
     const bool measure = renderer_->configure(s);
     const danmaku::Options o{s["speed"].toDouble(), s["fixedSeconds"].toDouble(), renderer_->trackHeight(),
                             s["maxTracks"].toInt(), s["maxActive"].toInt(), s["overlap"].toBool()};
@@ -739,6 +741,7 @@ void AppController::presentMedia(std::vector<danmaku::Item> items, const QString
     QScopedValueRollback commit(automaticCommit_, true);
     QScopedValueRollback source(automaticSource_, true);
     commitItems(std::move(items), title); start(false); sample.generation = mediaGeneration_; onSample(sample);
+    applyRendererSettings();
 }
 void AppController::clearMediaItems() {
     if (coordinator_.owner() != PlaybackCoordinator::Media && coordinator_.owner() != PlaybackCoordinator::External) return;
@@ -1178,6 +1181,10 @@ void AppController::beginDemo(int count) {
 }
 void AppController::writeReport(const QString& path) {
     updateMetrics();
+    metrics_["externalSourceKind"] = external_.active() ? (external_.localXml() ? "localXml" : "server") : "none";
+    metrics_["externalStatus"] = external_.status();
+    metrics_["effectiveFontSize"] = appliedRendererSettings_.value("fontSize");
+    metrics_["uniformFontSize"] = appliedRendererSettings_.value("uniformFontSize", false);
     QVariantList intervals;
     intervals.reserve(qsizetype(presentationIntervals_.size()));
     for (const auto ms : presentationIntervals_) intervals.append(ms);
@@ -1250,9 +1257,11 @@ void AppController::stepTimeOffset(double delta) {
     settings_.setValue(QStringLiteral("timeOffset"), next);
 }
 void AppController::stepFontSize(int delta) {
-    const int cur = settings_.values().value(QStringLiteral("fontSize")).toInt();
+    if (coordinator_.owner() == PlaybackCoordinator::External && !external_.localXml()) return;
+    const auto key = coordinator_.owner() == PlaybackCoordinator::External ? QStringLiteral("localXmlFontSize") : QStringLiteral("fontSize");
+    const int cur = settings_.values().value(key).toInt();
     const int next = std::clamp(cur + delta, 10, 72);
-    settings_.setValue(QStringLiteral("fontSize"), next);
+    settings_.setValue(key, next);
 }
 void AppController::showMainWindow() {
     emit requestShowMainWindow();

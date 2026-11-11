@@ -2,6 +2,7 @@
 #include "application/ExternalPlaybackSession.h"
 #include "infrastructure/ExternalSessionDescriptor.h"
 #include "infrastructure/OnlineDanmakuData.h"
+#include "infrastructure/DanmakuStyle.h"
 #include "platform/windows/MpvIpcBackend.h"
 #include <QCoreApplication>
 #include <QFile>
@@ -26,7 +27,8 @@ class FakeMpv {
   public:
     QLocalServer server;
     QJsonObject values{{"time-pos", 42.5}, {"duration", 1400.0}, {"pause", false}, {"speed", 1.5},
-                       {"path", "http://example.test/videos/24065/stream?api_key=private"}, {"idle-active", false}};
+                       {"path", "http://example.test/videos/24065/stream?api_key=private"}, {"idle-active", false},
+                       {"playlist", QJsonArray{QJsonObject{{"id", 7}, {"current", true}}}}};
     QList<QLocalSocket*> clients;
     FakeMpv() {
         server.setSocketOptions(QLocalServer::UserAccessOption);
@@ -111,6 +113,48 @@ class FakeMisaka : public QTcpServer {
 class ExternalPlaybackTests final : public QObject {
     Q_OBJECT
   private slots:
+    void localXmlLifecycleAndAppearance() {
+        QTemporaryDir dir; FakeMpv player; FakeMisaka server; server.profile(dir);
+        const auto xml = dir.filePath(QStringLiteral("本地 弹幕.XML"));
+        QFile file(xml); QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("<i><d p=\"42,1,24.5,16711680\">local red</d><d p=\"43,5,40,255\">fixed blue</d></i>"); file.close();
+        auto d = player.descriptor(); d["localXml"] = xml; d["playlistEntryId"] = "7";
+        AppController app(dir.path()); DanmakuItem renderer; QQuickWindow overlay; app.attach(&renderer, &overlay);
+        auto* session = qobject_cast<ExternalPlaybackSession*>(app.externalPlayback());
+        auto* settings = qobject_cast<SettingsStore*>(app.settings());
+        settings->setValue("localXmlFontSize", 42); settings->setValue("localXmlOpacity", .7);
+        QVERIFY(session->openLocalXml(d).isEmpty());
+        QTRY_COMPARE(app.total(), 2); QVERIFY(session->localXml()); QCOMPARE(server.searches, 0);
+        QTRY_VERIFY(app.position() >= 42.5); QCOMPARE(renderer.opacity(), .7);
+        app.stepFontSize(2); QTRY_COMPARE(settings->values()["localXmlFontSize"].toInt(), 44);
+        QCOMPARE(settings->values()["fontSize"].toInt(), 24);
+        player.values["pause"] = true; QTRY_VERIFY(!app.playing());
+        player.values["time-pos"] = 5; QTRY_COMPARE(app.position(), 5.0);
+        // A delayed auto matcher for this same video cannot replace the XML.
+        const auto descriptor = dir.filePath("session.json"); save(descriptor, QJsonObject::fromVariantMap(player.descriptor(2)));
+        QVERIFY(app.openExternalSession(descriptor).isEmpty()); QCOMPARE(app.total(), 2); QVERIFY(session->localXml());
+        // Repeated drops replace, rather than add to, the existing comments.
+        QVERIFY(session->openLocalXml(d).isEmpty()); QTRY_COMPARE(app.total(), 2);
+        player.values["path"] = "new-video.mkv";
+        QTRY_COMPARE(app.total(), 0); QVERIFY(!session->localXml());
+        QCOMPARE(server.downloads, 0);
+        // Once a later server source is selected, the local profile is not used.
+        save(descriptor, QJsonObject::fromVariantMap(player.descriptor(3)));
+        QVERIFY(app.openExternalSession(descriptor).isEmpty()); QTRY_COMPARE(app.total(), 1);
+        QCOMPARE(renderer.opacity(), settings->values()["opacity"].toDouble());
+    }
+    void wrongEntryAndCancelledXmlCannotAppear() {
+        QTemporaryDir dir; FakeMpv player;
+        const auto xml = dir.filePath("test.xml"); QFile file(xml); QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("<i><d p=\"42,1,25,16777215\">test</d></i>"); file.close();
+        auto d = player.descriptor(); d["localXml"] = xml; d["playlistEntryId"] = "8";
+        AppController app(dir.path()); DanmakuItem renderer; QQuickWindow overlay; app.attach(&renderer, &overlay);
+        auto* session = qobject_cast<ExternalPlaybackSession*>(app.externalPlayback());
+        QVERIFY(session->openLocalXml(d).isEmpty()); QTRY_VERIFY(!session->localXml()); QCOMPARE(app.total(), 0);
+        d["playlistEntryId"] = "7"; QVERIFY(session->openLocalXml(d).isEmpty()); session->cancelChoice();
+        QTest::qWait(350); QCOMPARE(app.total(), 0);
+        d["localXml"] = dir.filePath("missing.xml"); QVERIFY(!session->openLocalXml(d).isEmpty());
+    }
     void fractionalJsonFonts() {
         const auto result = parseOnlineDanmaku(R"({"comments":[{"p":"1,1,255,u","m":"a","fontSize":24.4},{"p":"2,5,255,u","m":"b","fontSize":24.5},{"p":"3,1,255,u","m":"c","fontSize":0},{"p":"4,1,255,u","m":"d"}]})");
         QCOMPARE(result.items.size(), size_t(3)); QCOMPARE(result.invalid, 1);

@@ -27,6 +27,10 @@
 
 Windows 编译包由 [GitHub Actions](../../actions/workflows/windows-release.yml) 生成；推送 `legacy-mpv-v*` 标签后自动发布运行 ZIP、对应源码材料和 SHA-256，详见 [云端发布说明](docs/GITHUB_RELEASE.md)。
 
+新增 **本地 XML 拖入 mpv**：在“设置 → MPV 网页接入 → 安装 XML 拖放”选择播放器，
+下次启动后直接向视频窗口拖入 XML。字体样式独立保存并自动复用；Emby 服务器弹幕保留源字号、颜色和类型。
+详见 [拖放安装及使用](docs/EMBY_MPV.md#将本地-xml-拖到-mpv026-起)。
+
 **Emby 网页一键 MPV（0.2.5 起）：**完整解压运行包，在 **设置 → MPV 网页接入 → 配置接入** 选择 `mpv.exe`，填写弹幕服务器地址和播放器 Token，然后点击 **保存并绑定协议**。启动器已集成在 DanmaX 内，不需要 Python；换电脑或移动目录后重新选择、绑定即可。支持原协议备份与还原，详见 [接入与迁移说明](docs/EMBY_MPV.md)。
 
 **DanmaX** 是一款专为 Windows 平台打造的原生高性能外挂弹幕工具。它能够将弹幕以完全鼠标穿透、自适应刷新率、低系统资源开销的方式，悬浮置顶在任意本地视频播放器（如 PotPlayer、MPC-HC、VLC、mpv 等）或网页浏览器之上。

@@ -25,6 +25,9 @@ MpvIpcBackend::MpvIpcBackend(QObject* parent) : MediaPlaybackBackend(parent) {
             const auto message = QJsonObject{{"command", QJsonArray{"observe_property", i + 1, properties[i]}}};
             socket_.write(QJsonDocument(message).toJson(QJsonDocument::Compact) + '\n');
         }
+        socket_.write(QJsonDocument(QJsonObject{{"command", QJsonArray{"observe_property", 50, "playlist"}}})
+            .toJson(QJsonDocument::Compact) + '\n');
+        command("playlist", 150);
         lastQuery_ = 0;
     });
 }
@@ -47,7 +50,7 @@ QString MpvIpcBackend::bind(const QVariantMap& d) {
 }
 void MpvIpcBackend::detach() {
     timer_.stop(); socket_.abort(); descriptor_.clear(); id_.clear(); selected_.clear();
-    properties_.clear(); buffer_.clear(); path_.clear(); latest_ = {};
+    properties_.clear(); buffer_.clear(); path_.clear(); entryId_.clear(); latest_ = {};
     observed_ = lastQuery_ = 0; validPosition_ = false; window_ = 0; rect_ = {}; windowVisible_ = false;
     if (processHandle_) { CloseHandle(processHandle_); processHandle_ = nullptr; }
 }
@@ -64,6 +67,11 @@ void MpvIpcBackend::requestSeek(MediaSample, double, quint64 request) {
 void MpvIpcBackend::command(const QString& property, int request) {
     socket_.write(QJsonDocument(QJsonObject{{"command", QJsonArray{"get_property", property}}, {"request_id", request}})
                       .toJson(QJsonDocument::Compact) + '\n');
+}
+void MpvIpcBackend::localXmlLoaded(int count, const QString& entry) {
+    if (socket_.state() != QLocalSocket::ConnectedState) return;
+    socket_.write(QJsonDocument(QJsonObject{{"command", QJsonArray{"script-message-to", "danmax_drop", "source-loaded",
+        QString::number(count), entry}}}).toJson(QJsonDocument::Compact) + '\n');
 }
 void MpvIpcBackend::maintain() {
     if (!processHandle_ || WaitForSingleObject(processHandle_, 0) != WAIT_TIMEOUT) {
@@ -96,9 +104,18 @@ void MpvIpcBackend::receive() {
         else {
             const int index = object.value("request_id").toInt() - 100;
             if (index >= 0 && index < properties.size() && object.value("error") == "success") property = properties[index];
+            if (object.value("request_id").toInt() == 150 && object.value("error") == "success") property = "playlist";
         }
         if (property.isEmpty()) continue;
         const auto value = object.value("data");
+        if (property == "playlist") {
+            QString entry;
+            for (const auto& item : value.toArray()) if (item.toObject().value("current").toBool()) {
+                entry = QString::number(item.toObject().value("id").toInteger()); break;
+            }
+            if (entryId_ != entry) { entryId_ = entry; updated = true; }
+            continue;
+        }
         properties_[property] = value.toVariant();
         if (property == "time-pos") {
             validPosition_ = value.isDouble() && std::isfinite(value.toDouble()) && value.toDouble() >= 0;

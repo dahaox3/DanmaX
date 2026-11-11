@@ -14,6 +14,10 @@ Item {
     property bool pinned: false
     property bool autoExpanded: false
     property real maximumWidth: 1920
+    readonly property bool localXml: backend && backend.externalPlayback && backend.externalPlayback.active && backend.externalPlayback.localXml
+    readonly property bool sourceStyle: backend && backend.externalPlayback && backend.externalPlayback.active && !localXml
+    readonly property var styleValues: backend ? backend.settings.values : ({})
+    readonly property real styleOpacity: localXml ? (styleValues.localXmlOpacity || 0.85) : (styleValues.opacity || 0.85)
     readonly property bool popoverOpen: opacityPopup.visible || seekPopup.visible
     readonly property bool isHovered: backend.toolbarPointer.hovered
     readonly property bool interactionHeld: opacitySlider.pressed || seekSlider.pressed
@@ -294,7 +298,7 @@ Item {
                 icon.source: Ui.icon("transparency-square")
                 icon.width: 16
                 icon.height: 16
-                text: Math.round((root.backend && root.backend.settings.values.opacity ? root.backend.settings.values.opacity : 0.85) * 100) + "%"
+                text: Math.round(root.styleOpacity * 100) + "%"
                 display: AbstractButton.TextBesideIcon
                 Accessible.name: I18n.toolbar.opacityTitle
                 ToolbarTip {
@@ -333,6 +337,7 @@ Item {
                     font.pixelSize: 12
                     font.bold: true
                     Accessible.name: I18n.toolbar.fontSizeDec
+                    enabled: !root.sourceStyle
                     ToolbarTip {
                         trigger: parent.hovered
                         text: I18n.toolbar.fontSizeDec
@@ -341,7 +346,7 @@ Item {
                 }
 
                 Label {
-                    text: (root.backend && root.backend.settings.values.fontSize ? root.backend.settings.values.fontSize : 24)
+                    text: root.sourceStyle ? "原始" : root.localXml ? root.styleValues.localXmlFontSize : (root.styleValues.fontSize || 24)
                     font.pixelSize: Ui.captionSize
                     font.bold: true
                     color: Ui.textColor
@@ -369,6 +374,7 @@ Item {
                     font.pixelSize: 12
                     font.bold: true
                     Accessible.name: I18n.toolbar.fontSizeInc
+                    enabled: !root.sourceStyle
                     ToolbarTip {
                         trigger: parent.hovered
                         text: I18n.toolbar.fontSizeInc
@@ -524,10 +530,10 @@ Item {
                 from: 0.05
                 to: 1.0
                 stepSize: 0.05
-                value: root.backend && root.backend.settings.values.opacity ? root.backend.settings.values.opacity : 0.85
+                value: root.styleOpacity
                 onMoved: {
                     if (root.backend) {
-                        root.backend.settings.setValue("opacity", Math.round(value * 100) / 100)
+                        root.backend.settings.setValue(root.localXml ? "localXmlOpacity" : "opacity", Math.round(value * 100) / 100)
                     }
                 }
             }

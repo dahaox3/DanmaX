@@ -10,6 +10,12 @@ DanmaX 是一款 Windows 平台下的原生高性能外挂弹幕工具，基于 
 
 ## 1. 上游开源项目与第三方组件全览
 
+Windows mpv XML 拖放插件使用 mpv v0.41.0 的公开 `client.h`（ISC 许可证），
+来源和 SHA-256 见 `third_party/mpv/README.md`，原许可完整保留于头文件并随
+`mpv-xml/mpv-client-ISC.h` 分发。插件通过 mpv 官方动态符号表调用宿主接口，
+不分发或链接额外的 libmpv/FFmpeg 运行库。插件使用 Windows SDK OLE 接口，
+旧版 mpv 缺少可拦截拖放的脚本接口，不能仅靠 Lua 在不中断视频的情况下完成此功能。
+
 ### 1.1 直接依赖库与框架
 
 | 组件名称 | 版本 / Commit | 许可证 | 官方仓库 / 主页 | 引入方式 / 作用 | 分发形态 |

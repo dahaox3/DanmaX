@@ -22,6 +22,7 @@ class DanmakuItem : public QQuickItem {
     double firstRenderedX() const { return firstRenderedX_.load(); }
     double snapshotAgeMs() const { return snapshotAgeMs_.load(); }
     double firstSnapshotFontSize() const { return visuals_.empty() ? 0 : visuals_.front().layout->font().pixelSize(); }
+    QRgb firstSnapshotColor() const { return visuals_.empty() ? 0 : visuals_.front().color; }
     bool imageBackend() const { return imageBackend_; }
     int imageNodeCount() const { return imageNodes_.load(); }
     qint64 textureBytes() const { return textureBytes_.load(); }
@@ -56,6 +57,8 @@ class DanmakuItem : public QQuickItem {
     Layout* layout(const danmaku::Item& item);
     QFont font_;
     int stroke_{1};
+    bool uniformFontSize_{};
+    QColor textColor_;
     bool textureBudgetAuto_{true};
     int textureBudgetLimitMiB_{512};
     // Cached whole-comment textures avoid separate outline/fill glyph batches.

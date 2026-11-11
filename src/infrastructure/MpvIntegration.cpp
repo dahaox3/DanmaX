@@ -7,10 +7,12 @@
 #include <QJsonDocument>
 #include <QUrl>
 #include <QDesktopServices>
+#include <QSaveFile>
+#include <QDateTime>
 #include <windows.h>
 
 MpvIntegration::MpvIntegration(QString data, QString executable, QObject* parent, QString root)
-    : QObject(parent), data_(std::move(data)), protocols_(data_, std::move(executable), std::move(root)) { refresh(); }
+    : QObject(parent), data_(std::move(data)), executable_(executable), protocols_(data_, std::move(executable), std::move(root)) { refresh(); }
 void MpvIntegration::refresh() {
     error_.clear(); notice_.clear(); config_ = {}; readable_ = true;
     QFile file(QDir(data_).filePath("external-player.json"));
@@ -77,3 +79,42 @@ bool MpvIntegration::restoreProtocols() {
     error_.clear(); notice_ = QStringLiteral("已还原本机原有绑定；其他程序后来接管的协议保持现状"); emit changed(); return true;
 }
 void MpvIntegration::openDefaultApps() { QDesktopServices::openUrl(QUrl("ms-settings:defaultapps")); }
+bool MpvIntegration::installXmlDrop(const QString& mpv) {
+    const auto path = localPath(QUrl(mpv));
+    const auto issue = validateExecutable(path); if (!issue.isEmpty()) return reject(issue);
+    DWORD binaryType{};
+    if (!GetBinaryTypeW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(path).utf16()), &binaryType) || binaryType != SCS_64BIT_BINARY)
+        return reject(QStringLiteral("XML 拖放组件需要 Windows x64 版 mpv"));
+    const QDir assets(QFileInfo(executable_).dir().filePath("mpv-xml"));
+    for (const auto* name : {"main.lua", "danmax_mpv_drop.dll"})
+        if (!QFileInfo::exists(assets.filePath(name))) return reject(QStringLiteral("运行目录缺少 mpv-xml 组件，请使用完整编译包"));
+    const auto portable = QFileInfo(path).dir().filePath("portable_config");
+    const auto mpvHome = qEnvironmentVariable("MPV_HOME");
+    const auto configRoot = !mpvHome.isEmpty() ? mpvHome : QDir(portable).exists() ? portable
+        : QDir(qEnvironmentVariable("APPDATA")).filePath("mpv");
+    const QDir target(QDir(configRoot).filePath("scripts/danmax_drop"));
+    QFile previous(target.filePath("config.json"));
+    if (QFileInfo::exists(target.filePath("main.lua")) && (!previous.open(QIODevice::ReadOnly)
+        || QJsonDocument::fromJson(previous.readAll()).object().value("integration") != "danmax-xml-drop"))
+        return reject(QStringLiteral("目标脚本目录已有其他内容，未覆盖"));
+    previous.close();
+    const QDir backup(QDir(data_).filePath("backups/mpv-xml-" + QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss-zzz")));
+    for (const auto* name : {"main.lua", "danmax_mpv_drop.dll", "config.json"}) {
+        if (QFileInfo::exists(target.filePath(name)) && (!QDir().mkpath(backup.path())
+            || !QFile::copy(target.filePath(name), backup.filePath(name)))) return reject(QStringLiteral("无法备份原拖放组件"));
+    }
+    if (!QDir().mkpath(target.path())) return reject(QStringLiteral("无法创建 mpv 脚本目录"));
+    const auto write = [](const QString& path, const QByteArray& bytes) {
+        QSaveFile file(path); return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size() && file.commit();
+    };
+    // The DLL goes first: an in-use old plugin must not leave a half-updated script.
+    for (const auto* name : {"danmax_mpv_drop.dll", "main.lua"}) {
+        QFile file(assets.filePath(name));
+        if (!file.open(QIODevice::ReadOnly) || !write(target.filePath(name), file.readAll()))
+            return reject(QStringLiteral("无法写入拖放组件，请关闭 mpv 后重试"));
+    }
+    const QJsonObject config{{"version", 1}, {"integration", "danmax-xml-drop"},
+        {"executable", QFileInfo(executable_).absoluteFilePath()}, {"dataDirectory", QFileInfo(data_).absoluteFilePath()}};
+    if (!write(target.filePath("config.json"), QJsonDocument(config).toJson())) return reject(QStringLiteral("无法保存拖放组件配置"));
+    error_.clear(); notice_ = QStringLiteral("XML 拖放已安装，下次启动 mpv 生效；本地样式在下方设置"); emit changed(); return true;
+}

@@ -44,6 +44,22 @@ SettingsSection {
             onClicked: pane.store.restoreProtocols()
         }
     }
+    SettingsRow {
+        title: "将 XML 弹幕拖入 MPV"
+        description: "选择 mpv.exe 安装拖放组件，下次启动生效。支持网页和本地视频，无需弹幕服务器。"
+        Button {
+            text: "安装 XML 拖放"
+            objectName: "installMpvXmlDrop"
+            Accessible.name: text
+            onClicked: dropProgram.open()
+        }
+    }
+    FileDialog {
+        id: dropProgram
+        title: "选择需要安装 XML 拖放组件的 mpv.exe"
+        nameFilters: ["MPV (mpv.exe)"]
+        onAccepted: pane.store.installXmlDrop(pane.store.localPath(selectedFile))
+    }
     Dialog {
         id: manager
         objectName: "mpvIntegrationDialog"

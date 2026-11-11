@@ -318,6 +318,25 @@ private slots:
         QCOMPARE(restored.values().value("maxFps").toInt(), 144);
         QVERIFY(settings->setValue("maxFps", 0));
         QTRY_COMPARE(spin->property("value").toInt(), 0);
+        auto* xmlSize = window->findChild<QQuickItem*>("localXmlFontSize"); QVERIFY(xmlSize);
+        for (int width : {800, 520}) {
+            window->resize(width, 690);
+            QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(xmlSize))));
+            auto* xmlInput = xmlSize->property("contentItem").value<QQuickItem*>(); QVERIFY(xmlInput);
+            xmlInput->forceActiveFocus();
+            QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+            QInputMethodEvent input; input.setCommitString("44"); QCoreApplication::sendEvent(window, &input);
+            QTest::keyClick(window, Qt::Key_Return);
+            QTRY_COMPARE(settings->values()["localXmlFontSize"].toInt(), 44);
+            QCOMPARE(settings->values()["fontSize"].toInt(), 24);
+            QTest::qWait(100);
+            const auto pos = xmlSize->mapToScene(QPointF());
+            QVERIFY(pos.y() >= 0 && pos.y() + xmlSize->height() <= window->height());
+            const auto capture = qEnvironmentVariable("DANMAX_XML_STYLE_CAPTURE");
+            if (!capture.isEmpty()) QVERIFY(window->grabWindow().save(capture + '-' + QString::number(width) + ".png"));
+        }
+        settings->flushPending(); SettingsStore xmlRestored(directory.filePath("data"));
+        QCOMPARE(xmlRestored.values()["localXmlFontSize"].toInt(), 44);
         QCOMPARE(warnings.count(), 0);
     }
 

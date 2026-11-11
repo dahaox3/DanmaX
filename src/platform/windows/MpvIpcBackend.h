@@ -23,6 +23,8 @@ class MpvIpcBackend final : public MediaPlaybackBackend {
     QString screenName() const;
     QRect nativeScreenRect() const;
     MediaSample latest() const { return latest_; }
+    QString playlistEntryId() const { return entryId_; }
+    void localXmlLoaded(int count, const QString& entry);
   signals:
     void geometryChanged();
     void processExited();
@@ -38,7 +40,7 @@ class MpvIpcBackend final : public MediaPlaybackBackend {
     QVariantMap descriptor_;
     QVariantMap properties_;
     QByteArray buffer_;
-    QString id_, selected_, path_;
+    QString id_, selected_, path_, entryId_;
     quint64 generation_{}, contentToken_{1};
     double observed_{}, lastQuery_{};
     bool validPosition_{}, exited_{}, windowVisible_{};

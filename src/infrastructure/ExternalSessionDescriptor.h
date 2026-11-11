@@ -8,4 +8,5 @@ QString processStamp(qint64 pid, const QString& executable);
 QString validate(const QVariantMap& descriptor);
 QVariantMap read(const QString& path, QString& error);
 QString sessionId(const QVariantMap& descriptor);
+QVariantMap localXml(qint64 pid, const QString& pipe, const QString& file, const QString& entry, QString& error);
 }

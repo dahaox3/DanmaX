@@ -65,12 +65,18 @@ function Sync-DevelopmentRuntime([string] $Executable, [string] $Directory, [str
                                  [hashtable] $Tools, [string] $Preset) {
     Assert-DeploymentDirectory $Directory
     $destination = Join-Path $Directory 'DanmaX.exe'
+    $dropAssets = Join-Path (Split-Path $Executable) 'mpv-xml'
     $identity = (@($ProjectRoot, $Directory, $Preset, $Tools.Qt) + @(
         foreach ($inputFile in @($Executable, (Get-ProjectPath 'scripts/deployment.ps1'),
             (Get-ProjectPath 'toolchain/dependencies.lock.json'), (Get-ProjectPath 'LICENSE'),
             (Get-ProjectPath 'docs/THIRD_PARTY.md'), (Get-ProjectPath 'docs/PACKAGING.md'),
             (Get-ProjectPath 'resources/fluent/LICENSE'))) {
             (Get-FileHash -LiteralPath $inputFile -Algorithm SHA256).Hash
+        }
+        if (Test-Path -LiteralPath $dropAssets) {
+            foreach ($asset in Get-ChildItem -LiteralPath $dropAssets -File | Sort-Object Name) {
+                $asset.Name + ':' + (Get-FileHash -LiteralPath $asset.FullName -Algorithm SHA256).Hash
+            }
         }
     )) -join "`n"
     $stateFile = Join-Path $BuildDirectory 'run-deployment.json'
@@ -98,6 +104,15 @@ function Sync-DevelopmentRuntime([string] $Executable, [string] $Directory, [str
     New-Item -ItemType Directory -Force $Directory | Out-Null
     Copy-Item -LiteralPath $Executable -Destination $destination -Force
     $managed = @($destination)
+    if (Test-Path -LiteralPath $dropAssets) {
+        $dropTarget = Join-Path $Directory 'mpv-xml'
+        New-Item -ItemType Directory -Force $dropTarget | Out-Null
+        foreach ($asset in Get-ChildItem -LiteralPath $dropAssets -File) {
+            $assetTarget = Join-Path $dropTarget $asset.Name
+            Copy-Item -LiteralPath $asset.FullName -Destination $assetTarget -Force
+            $managed += $assetTarget
+        }
+    }
     if ($Preset -ne 'windows-static-release') {
         if ($repair) {
             # Forced in-place deployment can fail on icuuc.dll even after the

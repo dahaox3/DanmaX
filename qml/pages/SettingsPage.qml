@@ -90,6 +90,49 @@ PageFrame {
     }
 
     SettingsSection {
+        title: "拖入 XML 的字体样式"; Layout.fillWidth: true
+        Label {
+            text: "自动保存并用于下次拖入。服务器弹幕保留原始字号、颜色和类型；源数据未提供的字体等属性使用通用设置。"
+            wrapMode: Text.WordWrap; Layout.fillWidth: true; color: Ui.secondaryText
+        }
+        SettingsRow {
+            title: "本地字体"
+            FontSelector { families: page.backend.fontFamilies; family: page.values.localXmlFontFamily; onFamilySelected: function(name) { page.put("localXmlFontFamily", name) } }
+        }
+        SettingsRow {
+            title: "统一字号"
+            SpinBox { objectName: "localXmlFontSize"; from: 10; to: 72; value: page.values.localXmlFontSize; editable: true; Accessible.name: "本地 XML 字号"; onValueModified: page.put("localXmlFontSize", value) }
+        }
+        SettingsRow {
+            title: "粗体"
+            Switch { checked: page.values.localXmlBold; Accessible.name: "本地 XML 粗体"; onToggled: page.put("localXmlBold", checked) }
+        }
+        SettingsRow {
+            title: "描边宽度"
+            SpinBox { from: 0; to: 6; value: page.values.localXmlStrokeWidth; editable: true; Accessible.name: "本地 XML 描边宽度"; onValueModified: page.put("localXmlStrokeWidth", value) }
+        }
+        SettingsRow {
+            title: "不透明度"
+            SpinBox { from: 5; to: 100; value: Math.round(page.values.localXmlOpacity * 100); editable: true; Accessible.name: "本地 XML 不透明度百分比"; onValueModified: page.put("localXmlOpacity", value / 100) }
+            Label { text: "%" }
+        }
+        SettingsRow {
+            title: "保留 XML 原始颜色"
+            Switch { checked: page.values.localXmlUseSourceColor; Accessible.name: "保留 XML 原始颜色"; onToggled: page.put("localXmlUseSourceColor", checked) }
+        }
+        SettingsRow {
+            title: "自定义文字颜色"
+            visible: !page.values.localXmlUseSourceColor
+            TextField {
+                text: page.values.localXmlColor; placeholderText: "#FFFFFF"; maximumLength: 7
+                implicitWidth: 140; Accessible.name: "本地 XML 颜色，十六进制 RGB"
+                validator: RegularExpressionValidator { regularExpression: /#[0-9a-fA-F]{6}/ }
+                onEditingFinished: { if (acceptableInput) page.put("localXmlColor", text); else text = page.values.localXmlColor }
+            }
+        }
+    }
+
+    SettingsSection {
         title: I18n.settings.playbackSection; Layout.fillWidth: true
         SettingsRow {
             title: I18n.settings.maxFpsTitle
