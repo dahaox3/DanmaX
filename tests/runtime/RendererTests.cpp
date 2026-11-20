@@ -1,6 +1,9 @@
 #include "renderer/DanmakuItem.h"
 #include "renderer/TextTextureCache.h"
 #include <QQuickWindow>
+#include <QScreen>
+#include <algorithm>
+#include <cmath>
 #include <QTest>
 #include "infrastructure/DanmakuStyle.h"
 #include "infrastructure/SettingsStore.h"
@@ -9,6 +12,191 @@
 class RendererTests : public QObject {
     Q_OBJECT
   private slots:
+    void retainedDesktopScroll() {
+        if (QGuiApplication::platformName() != "windows") QSKIP("Requires a native Windows composition target");
+        QQuickWindow window;
+        window.setFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowTransparentForInput | Qt::WindowDoesNotAcceptFocus);
+        window.setColor(Qt::transparent);
+        window.resize(430, 230);
+        DanmakuItem item(window.contentItem());
+        item.setSize(QSizeF(window.size()));
+        item.configure({{"fontFamily", "Microsoft YaHei"}, {"fontSize", 22}, {"strokeWidth", 1},
+                        {"lineSpacing", .2}, {"opacity", .45}});
+        window.show();
+        QTRY_VERIFY(window.isExposed());
+        item.enableDesktopScroll(true);
+        danmaku::Engine engine;
+        danmaku::Options options;
+        options.overlap = true; options.trackHeight = item.trackHeight();
+        engine.configure(options, window.width(), window.height());
+        engine.load({{0, danmaku::Mode::Scroll, "共享试验", 0xff80ff}, {0, danmaku::Mode::Scroll, "共享试验", 0xff80ff},
+                     {0, danmaku::Mode::Bottom, "固定", 0xffffff}});
+        auto measure = [&](const auto& line) { return item.measure(line); };
+        engine.tick(0, 0, true, measure);
+        item.present(engine, 180);
+        QVERIFY(item.desktopActive());
+        const auto& desktop = item.desktopLayer();
+        QCOMPARE(desktop.count(), 2);
+        QCOMPARE(desktop.individualCount(), 2);
+        QCOMPARE(desktop.sharedCount(), 0);
+        QVERIFY(desktop.individualKeyframes() > 0);
+        QCOMPARE(desktop.uploads(), 1u);
+        QVERIFY(desktop.bytes() > 0);
+        QTRY_COMPARE(item.sceneEntries(), 1);
+        const auto start = desktop.commits();
+        for (int n = 1; n <= 30; ++n) {
+            engine.tick(n / 60., 1. / 60, true, measure);
+            item.present(engine, 180);
+        }
+        QCOMPARE(desktop.commits(), start);
+        item.present(engine, 0);
+        QCOMPARE(desktop.commits(), start + 1);
+        QCOMPARE(desktop.individualKeyframes(), 0);
+        item.present(engine, 0);
+        QCOMPARE(desktop.commits(), start + 1);
+        item.present(engine, 360);
+        QCOMPARE(desktop.commits(), start + 2);
+        QCOMPARE(desktop.individualCount(), 2);
+        QCOMPARE(desktop.uploads(), 1u);
+        item.enableDesktopScroll(false);
+        item.present(engine, 360);
+        QTRY_COMPARE(item.sceneEntries(), 3);
+        QCOMPARE(desktop.bytes(), 0);
+        item.enableDesktopScroll(true);
+        item.present(engine, 360);
+        engine.seek(20);
+        item.present(engine);
+        QCOMPARE(desktop.count(), 0);
+        QCOMPARE(desktop.bytes(), 0);
+        engine.load({{0, danmaku::Mode::Scroll, std::string(2400, 'W'), 0xffffff}});
+        engine.tick(0, 0, true, measure);
+        item.present(engine, 180);
+        QVERIFY(!item.desktopActive());
+        QVERIFY(desktop.lastError() < 0);
+        QTRY_COMPARE(item.sceneEntries(), 1);
+        QCOMPARE(item.snapshotCount(), 1);
+        item.clearContent();
+        QVERIFY(!item.desktopActive());
+    }
+    void desktopClockSwitchRetainsSurfaces() {
+        if (QGuiApplication::platformName() != "windows") QSKIP("Requires a native Windows composition target");
+        QQuickWindow window;
+        window.setFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowTransparentForInput |
+                        Qt::WindowDoesNotAcceptFocus);
+        window.setColor(Qt::transparent);
+        window.resize(400, 180);
+        window.show();
+        QTRY_VERIFY(window.isExposed());
+        if (window.screen() != QGuiApplication::primaryScreen()) QSKIP("Requires the primary output");
+        const auto primary = reinterpret_cast<quintptr>(window.screen());
+        const double hz = std::max(1.0, window.screen()->refreshRate());
+        const double cadence = hz / std::max(1, (qRound(hz) + 79) / 80);
+        auto text = std::make_shared<QTextLayout>(QStringLiteral("phase"));
+        text->beginLayout();
+        text->createLine().setLineWidth(100);
+        text->endLayout();
+        const std::vector<DanmakuVisual> lines{{1, 300, 10, qRgb(255, 255, 255), text, true}};
+        DesktopScrollLayer layer;
+        const auto submit = [&](quintptr screen) {
+            return layer.synchronize(window.winId(), lines, 1, 0, 1, 160, cadence, 1, 8 * 1024 * 1024, screen);
+        };
+        QVERIFY(submit(0));
+        QVERIFY(!layer.refreshAligned());
+        QCOMPARE(layer.animationCadence(), cadence);
+        const auto initial = layer.commits();
+        QVERIFY(submit(primary));
+        QCOMPARE(layer.commits(), initial + 1);
+        QVERIFY(std::abs(layer.animationCadence() / cadence - 1) < .012);
+        QVERIFY(submit(primary));
+        QCOMPARE(layer.commits(), initial + 1);
+        QVERIFY(submit(0));
+        QCOMPARE(layer.commits(), initial + 2);
+        QVERIFY(!layer.refreshAligned());
+        QCOMPARE(layer.animationCadence(), cadence);
+        QCOMPARE(layer.individualCount(), 1);
+        QCOMPARE(layer.uploads(), 1u);
+    }
+    void boundedPerCommentMotion() {
+        if (QGuiApplication::platformName() != "windows") QSKIP("Requires a native Windows composition target");
+        QQuickWindow window;
+        window.setFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowTransparentForInput | Qt::WindowDoesNotAcceptFocus);
+        window.setColor(Qt::transparent);
+        window.resize(640, 320);
+        window.show();
+        QTRY_VERIFY(window.isExposed());
+        DesktopScrollLayer layer;
+        QFont font("Microsoft YaHei");
+        font.setPixelSize(16);
+        auto layout = std::make_shared<QTextLayout>("flight", font);
+        layout->beginLayout();
+        layout->createLine().setLineWidth(10000);
+        layout->endLayout();
+        std::vector<DanmakuVisual> lines;
+        for (quint64 i = 0; i < 120; ++i)
+            lines.push_back({i + 1, 520, double(i), qRgb(255, 255, 255), layout, true});
+        const auto submit = [&](double velocity, double cadence = 80, qreal scale = 1) {
+            return layer.synchronize(window.winId(), lines, scale, 0, 1, velocity, cadence, 1, 8 * 1024 * 1024);
+        };
+
+        QVERIFY(submit(100));
+        QCOMPARE(layer.uploads(), 1u);
+        QVERIFY(layer.individualCount() > 0);
+        QVERIFY(layer.sharedCount() > 0);
+        QCOMPARE(layer.individualCount() + layer.sharedCount(), int(lines.size()));
+        QVERIFY(layer.individualKeyframes() <= DesktopScrollLayer::maxNewKeyframes);
+        for (int i = 0; i < 12; ++i) {
+            const int previous = layer.individualKeyframes();
+            QVERIFY(submit(100));
+            QVERIFY(layer.individualKeyframes() >= previous);
+            QVERIFY(layer.individualKeyframes() - previous <= DesktopScrollLayer::maxNewKeyframes);
+            QVERIFY(layer.individualKeyframes() <= DesktopScrollLayer::maxIndividualKeyframes);
+        }
+        QVERIFY(layer.individualKeyframes() > DesktopScrollLayer::maxNewKeyframes);
+        QVERIFY(layer.sharedCount() > 0);
+
+        // Releasing existing private curves makes room for an overflow line.
+        lines.erase(lines.begin(), lines.end() - 1);
+        QVERIFY(submit(100));
+        QCOMPARE(layer.individualCount(), 1);
+        QCOMPARE(layer.sharedCount(), 0);
+        QCOMPARE(layer.uploads(), 1u);
+
+        // A very slow flight cannot allocate one segment for every future step.
+        QVERIFY(submit(0.00000001));
+        QCOMPARE(layer.sharedCount(), 1);
+        QCOMPARE(layer.individualKeyframes(), 0);
+        const auto slowCommit = layer.commits();
+        QVERIFY(submit(0.00000001));
+        QCOMPARE(layer.commits(), slowCommit);
+        QVERIFY(submit(0));
+        QCOMPARE(layer.sharedCount(), 0);
+        QCOMPARE(layer.individualKeyframes(), 0);
+        QVERIFY(submit(200, 60, 1.5));
+        QCOMPARE(layer.individualCount(), 1);
+        QCOMPARE(layer.sharedCount(), 0);
+        QCOMPARE(layer.uploads(), 2u);
+        lines.clear();
+        QVERIFY(submit(200, 60, 1.5));
+        QCOMPARE(layer.individualKeyframes(), 0);
+        QCOMPARE(layer.bytes(), 0);
+
+        auto longLayout = std::make_shared<QTextLayout>(QString(180, 'W'), font);
+        longLayout->beginLayout();
+        longLayout->createLine().setLineWidth(10000);
+        longLayout->endLayout();
+        lines.push_back({1, 100, 0, qRgb(255, 255, 255), layout, true});
+        lines.push_back({2, 100, 20, qRgb(255, 255, 255), longLayout, true});
+        QVERIFY(submit(25));
+        QCOMPARE(layer.individualCount(), 1);
+        QCOMPARE(layer.sharedCount(), 1);
+        const auto mixedUploads = layer.uploads();
+        // The long line fits an individual curve near the end of its flight.
+        lines.back().x = -longLayout->lineAt(0).naturalTextWidth() + 30;
+        QVERIFY(submit(25));
+        QCOMPARE(layer.individualCount(), 2);
+        QCOMPARE(layer.sharedCount(), 0);
+        QCOMPARE(layer.uploads(), mixedUploads);
+    }
     void sourceSpecificStyles() {
         QTemporaryDir dir;
         {
@@ -133,6 +321,62 @@ class RendererTests : public QObject {
         if (!artifacts.isEmpty()) QVERIFY(image.save(artifacts + "-partial-scroll.png"));
     }
 
+    void incrementalMotionMatchesFullRepaint() {
+        QQuickWindow window;
+        window.setColor(Qt::transparent);
+        window.resize(403, 193);
+        DanmakuItem item(window.contentItem());
+        item.setSize(QSizeF(window.size()));
+        item.configure({{"fontFamily", "Microsoft YaHei"}, {"fontSize", 23}, {"strokeWidth", 2},
+                        {"lineSpacing", .3}, {"opacity", .65}});
+        danmaku::Engine engine;
+        danmaku::Options options;
+        options.speed = 145; options.trackHeight = item.trackHeight(); options.overlap = true;
+        engine.configure(options, window.width(), window.height());
+        engine.load({{0, danmaku::Mode::Scroll, "滚动 Abc", 0xff2000},
+                     {0, danmaku::Mode::Top, "顶 Top", 0x00ff00},
+                     {0, danmaku::Mode::Bottom, "底 Bottom", 0x1000ff}});
+        const auto measure = [&](const auto& line) { return item.measure(line); };
+        engine.tick(0, 0, true, measure);
+        item.present(engine);
+        window.show();
+        // A cold glyph upload may be deferred by the per-frame budget. Supply
+        // the further update requests that normal playback would generate.
+        QTRY_VERIFY(([&] { item.update(); return item.imageNodeCount() == 3; })());
+        double position = 0;
+        for (const double delta : {.31, .013, .029, .37, .61, .023, .52, .017, .83, .45, 1.4, 1.1}) {
+            position += delta;
+            engine.tick(position, delta, true, measure);
+            item.present(engine);
+            // The software adaptation grabs its retained backing store. A change
+            // of the window clear color also gives us a full repaint to compare.
+            const QImage incremental = window.grabWindow();
+            QVERIFY(!incremental.isNull());
+            window.setColor(Qt::white);
+            window.grabWindow();
+            window.setColor(Qt::transparent);
+            const QImage repainted = window.grabWindow();
+            QCOMPARE(incremental, repainted);
+            if (position < 1) {
+                const QImage pixels = incremental.convertToFormat(QImage::Format_ARGB32);
+                int red = 0, green = 0, blue = 0;
+                for (int y = 0; y < pixels.height(); ++y)
+                    for (int x = 0; x < pixels.width(); ++x) {
+                        const auto pixel = pixels.pixel(x, y);
+                        if (qAlpha(pixel) < 24) continue;
+                        red += qRed(pixel) > 150 && qBlue(pixel) < 64;
+                        green += qGreen(pixel) > 150 && qRed(pixel) < 64;
+                        blue += qBlue(pixel) > 150 && y > pixels.height() / 2;
+                    }
+                QVERIFY(red && green && blue);
+            }
+        }
+        engine.clear(); item.present(engine);
+        const auto cleared = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
+        for (int y = 0; y < cleared.height(); ++y)
+            for (int x = 0; x < cleared.width(); ++x)
+                QVERIFY(qAlpha(cleared.pixel(x, y)) == 0);
+    }
     void colorsOutlineAndTransparency_data() {
         QTest::addColumn<int>("stroke");
         QTest::newRow("no-outline") << 0;

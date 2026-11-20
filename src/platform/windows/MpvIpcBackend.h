@@ -42,6 +42,8 @@ class MpvIpcBackend final : public MediaPlaybackBackend {
     QByteArray buffer_;
     QString id_, selected_, path_, entryId_;
     quint64 generation_{}, contentToken_{1};
+    quint64 timelineRevision_{};
+    bool seekPending_{};
     double observed_{}, lastQuery_{};
     bool validPosition_{}, exited_{}, windowVisible_{};
     quintptr window_{};

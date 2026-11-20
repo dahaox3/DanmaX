@@ -27,6 +27,10 @@ MpvIpcBackend::MpvIpcBackend(QObject* parent) : MediaPlaybackBackend(parent) {
         }
         socket_.write(QJsonDocument(QJsonObject{{"command", QJsonArray{"observe_property", 50, "playlist"}}})
             .toJson(QJsonDocument::Compact) + '\n');
+        // Optional on older mpv versions. Its absence must not hold up playback.
+        properties_.remove("paused-for-cache");
+        socket_.write(QJsonDocument(QJsonObject{{"command", QJsonArray{"observe_property", 51, "paused-for-cache"}}})
+            .toJson(QJsonDocument::Compact) + '\n');
         command("playlist", 150);
         lastQuery_ = 0;
     });
@@ -51,6 +55,7 @@ QString MpvIpcBackend::bind(const QVariantMap& d) {
 void MpvIpcBackend::detach() {
     timer_.stop(); socket_.abort(); descriptor_.clear(); id_.clear(); selected_.clear();
     properties_.clear(); buffer_.clear(); path_.clear(); entryId_.clear(); latest_ = {};
+    timelineRevision_ = 0; seekPending_ = false;
     observed_ = lastQuery_ = 0; validPosition_ = false; window_ = 0; rect_ = {}; windowVisible_ = false;
     if (processHandle_) { CloseHandle(processHandle_); processHandle_ = nullptr; }
 }
@@ -99,6 +104,11 @@ void MpvIpcBackend::receive() {
     while (buffer_.contains('\n')) {
         const int end = static_cast<int>(buffer_.indexOf('\n'));
         const auto object = QJsonDocument::fromJson(buffer_.left(end)).object(); buffer_.remove(0, end + 1);
+        if (object.value("event") == "seek") {
+            seekPending_ = true;
+            command("time-pos", 100);
+            continue;
+        }
         QString property;
         if (object.value("event") == "property-change") property = object.value("name").toString();
         else {
@@ -119,12 +129,13 @@ void MpvIpcBackend::receive() {
         properties_[property] = value.toVariant();
         if (property == "time-pos") {
             validPosition_ = value.isDouble() && std::isfinite(value.toDouble()) && value.toDouble() >= 0;
+            if (seekPending_ && validPosition_) { ++timelineRevision_; seekPending_ = false; }
             observed_ = MediaMonitor::monotonicSeconds(); updated = true;
         }
         if (property == "path" && value.isString() && !value.toString().isEmpty() && path_ != value.toString()) {
             path_ = value.toString(); ++contentToken_; emit contentChanged(path_); updated = true;
         }
-        if (property == "pause" || property == "idle-active") updated = true;
+        if (property == "pause" || property == "idle-active" || property == "paused-for-cache" || property == "speed") updated = true;
     }
     if (updated) publish();
 }
@@ -132,6 +143,7 @@ void MpvIpcBackend::publish() {
     if (selected_.isEmpty()) return;
     MediaSample s;
     s.id = id_; s.generation = generation_; s.sessionToken = contentToken_;
+    s.timelineRevision = timelineRevision_;
     s.title = descriptor_.value("emby").toMap().value("title").toString();
     s.identity = QString::number(contentToken_);
     // A URL can contain Emby/115 credentials. Only expose its identity digest.
@@ -143,7 +155,7 @@ void MpvIpcBackend::publish() {
     s.position = properties_.value("time-pos").toDouble(); s.duration = properties_.value("duration").toDouble();
     s.rate = properties_.value("speed", 1).toDouble();
     const bool idle = properties_.value("idle-active", true).toBool() || !validPosition_;
-    s.playing = s.found && !idle && !properties_.value("pause", true).toBool();
+    s.playing = s.found && !idle && !properties_.value("pause", true).toBool() && !properties_.value("paused-for-cache").toBool();
     s.playback = exited_ ? MediaSample::Playback::Closed : !s.found ? MediaSample::Playback::Unknown
         : idle ? MediaSample::Playback::Stopped : s.playing ? MediaSample::Playback::Playing : MediaSample::Playback::Paused;
     latest_ = s; emit sampleReceived(s);

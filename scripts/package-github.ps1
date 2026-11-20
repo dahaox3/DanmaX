@@ -121,7 +121,7 @@ $forbidden = @(Get-ChildItem -LiteralPath $stage -Recurse -Force | Where-Object 
     $_.Name -in @('settings.ini','external-player.json','external-associations.json','mpv-protocol-backup.json','danmax-bridge.json','.git','cache','logs','__pycache__') -or
     $_.Extension -in @('.log','.pdb','.pyc')
 })
-if ($forbidden.Count) { throw 'Release staging contains user data or development artifacts.' }
+if ($forbidden.Count -or (Test-Path -LiteralPath (Join-Path $stage 'diagnostics'))) { throw 'Release staging contains user data or development artifacts.' }
 
 # Validate with the deployed Qt/QML paths and only system directories on PATH.
 Invoke-ProjectEnvironment {

@@ -2,8 +2,10 @@
 #include "renderer/TextTextureCache.h"
 #include <QSGSimpleTextureNode>
 #include <QFontMetricsF>
+#include <QGuiApplication>
 #include <QMatrix4x4>
 #include <QQuickWindow>
+#include <QScreen>
 #include <QSGTextNode>
 #include <QVariantMap>
 #include <algorithm>
@@ -102,10 +104,12 @@ DanmakuItem::DanmakuItem(QQuickItem* parent) : QQuickItem(parent) {
     setFlag(ItemHasContents, true);
     setClip(true);
     connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow* window) {
+        enableDesktopScroll(false);
         disconnect(invalidationConnection_);
         disconnect(stoppingConnection_);
         if (window) {
             stoppingConnection_ = connect(window, &QQuickWindow::sceneGraphAboutToStop, this, [this, window] {
+                tracePoint_ = {};
                 // All render loops emit this before hiding. Drop drawing resources here,
                 // including temporary hides; GUI snapshots preserve IDs and paused positions.
                 // A weak lifetime handle prevents access to a root already deleted by Qt.
@@ -119,6 +123,7 @@ DanmakuItem::DanmakuItem(QQuickItem* parent) : QQuickItem(parent) {
                 capacityFallbacks_ = preparationFallbacks_ = sizeFallbacks_ = allocationFallbacks_ = 0;
             }, Qt::DirectConnection);
             invalidationConnection_ = connect(window, &QQuickWindow::sceneGraphInvalidated, this, [this] {
+                tracePoint_ = {};
                 // This signal runs on the render thread; do not touch GUI snapshots or caches.
                 sceneEntries_.store(0);
                 imageNodes_.store(0);
@@ -131,7 +136,27 @@ DanmakuItem::DanmakuItem(QQuickItem* parent) : QQuickItem(parent) {
         }
     });
 }
+void DanmakuItem::itemChange(ItemChange change, const ItemChangeData& data) {
+    QQuickItem::itemChange(change, data);
+    if (change == ItemDevicePixelRatioHasChanged && desktopActive_) emit desktopScaleChanged();
+}
+void DanmakuItem::enableDesktopScroll(bool enable) {
+    if (desktopRequested_ == enable) return;
+    desktopRequested_ = enable;
+    desktopFailed_ = false;
+    if (!enable) {
+        desktop_.reset();
+        desktopActive_ = false;
+        desktopBytesForScene_ = 0;
+    }
+}
 void DanmakuItem::clearContent() {
+    desktop_.reset();
+    desktopActive_ = false;
+    desktopFailed_ = false;
+    desktopBytesForScene_ = 0;
+    std::vector<Visual>().swap(nextVisuals_);
+    if (traceEnabled_) { ++snapshotSerial_; snapshotTimestamp_ = snapshotNow(); }
     std::vector<Visual>().swap(visuals_);
     std::vector<Visual>().swap(slotVisuals_);
     std::vector<std::size_t>().swap(previousSlots_);
@@ -206,6 +231,7 @@ double DanmakuItem::trackHeight() const {
 }
 void DanmakuItem::present(const danmaku::Engine& engine, double scrollingPixelsPerSecond) {
     snapshotTimestamp_ = snapshotNow();
+    if (traceEnabled_) ++snapshotSerial_;
     scrollingPixelsPerSecond_ = std::isfinite(scrollingPixelsPerSecond) ? scrollingPixelsPerSecond : 0;
     const auto& active = engine.activeSlots();
     // Retire references before reusing slots; only live slots enter the scene snapshot.
@@ -214,8 +240,8 @@ void DanmakuItem::present(const danmaku::Engine& engine, double scrollingPixelsP
             slotVisuals_[slot] = {};
     slotVisuals_.resize(active.size());
     previousSlots_ = engine.activeIndices();
-    visuals_.clear();
-    visuals_.reserve(engine.activeCount());
+    nextVisuals_.clear();
+    nextVisuals_.reserve(engine.activeCount());
     for (const auto i : engine.activeIndices()) {
         const auto& a = active[i];
         auto& visual = slotVisuals_[i];
@@ -231,15 +257,45 @@ void DanmakuItem::present(const danmaku::Engine& engine, double scrollingPixelsP
             visual.x = a.x;
             visual.y = a.y;
         }
-        visuals_.push_back(visual);
+        nextVisuals_.push_back(visual);
     }
+    if (desktopRequested_ && !desktopFailed_ && window() && window()->handle() && window()->isVisible()) {
+        const auto screen = window()->screen();
+        const double hz = screen && screen->refreshRate() >= 1 ? screen->refreshRate() : 60.0;
+        desktopCadence_ = hz / std::max(1, (qRound(hz) + 79) / 80);
+        const auto remaining = std::max<qint64>(0, textureBudgetLimitMiB_ * TextureBudget::MiB - textureBytes_.load());
+        const quintptr primaryScreen = screen && screen == QGuiApplication::primaryScreen() ? reinterpret_cast<quintptr>(screen) : 0;
+        desktopActive_ = desktop_.synchronize(window()->winId(), nextVisuals_, window()->effectiveDevicePixelRatio(),
+            stroke_, opacity(), scrollingPixelsPerSecond_, desktopCadence_, generation_, remaining, primaryScreen);
+        desktopBytesForScene_ = desktop_.bytes();
+        if (!desktopActive_) {
+            desktopFailed_ = true;
+            qWarning("Windows composition scroll fallback (HRESULT 0x%08lx)", desktop_.lastError());
+        }
+    }
+    if (desktopActive_) {
+        std::erase_if(nextVisuals_, [](const Visual& v) { return v.scrolling; });
+        if (nextVisuals_.size() == visuals_.size() &&
+            std::equal(nextVisuals_.begin(), nextVisuals_.end(), visuals_.begin(), [](const Visual& a, const Visual& b) {
+                return a.id == b.id && a.x == b.x && a.y == b.y && a.color == b.color && a.layout == b.layout;
+            })) return; // DWM samples the motion even if the Qt scene is completely idle.
+    }
+    visuals_.swap(nextVisuals_);
     update();
 }
 QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
     // beginFrame can block on the compositor/GPU before scene synchronization.
     // Reproject only the drawn scrolling position to this synchronization time;
     // admission, collisions, lifetimes and seeks remain owned by the engine.
-    const double age = snapshotTimestamp_ ? std::max(0.0, (snapshotNow() - snapshotTimestamp_) * 1e-9) : 0;
+    const auto sceneNow = snapshotNow();
+    const double age = snapshotTimestamp_ ? std::max(0.0, (sceneNow - snapshotTimestamp_) * 1e-9) : 0;
+    if (traceEnabled_) {
+        tracePoint_ = {};
+        tracePoint_.snapshot = snapshotSerial_;
+        tracePoint_.snapshotNs = snapshotTimestamp_;
+        tracePoint_.sceneNs = sceneNow;
+        tracePoint_.active = static_cast<int>(visuals_.size());
+    }
     snapshotAgeMs_.store(age * 1000);
     const double correction = scrollingPixelsPerSecond_ * std::min(age, .1);
     auto* root = static_cast<Root*>(old);
@@ -303,8 +359,9 @@ QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
             root->demand += entry.description.bytes;
         }
     }
-    const qint64 budget = imageBackend_ ? root->budget.update(root->demand, textureBudgetAuto_,
-        textureBudgetLimitMiB_ * TextureBudget::MiB, root->budgetTime.elapsed()) : 0;
+    const qint64 remaining = std::max<qint64>(0, textureBudgetLimitMiB_ * TextureBudget::MiB - desktopBytesForScene_);
+    const qint64 budget = imageBackend_ ? std::min<qint64>(remaining, root->budget.update(root->demand, textureBudgetAuto_,
+        textureBudgetLimitMiB_ * TextureBudget::MiB, root->budgetTime.elapsed())) : 0;
     root->textures.setBudget(budget);
     if (root->textures.bytes() > budget) {
         // Preserve the earliest live textures. Destroy borrowing image nodes before
@@ -339,11 +396,18 @@ QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
         }
         if (!entry.node->firstChild()) addText(entry, window(), stroke_);
         entry.frame = root->frame;
-        QMatrix4x4 matrix;
         const double x = visual.x - (visual.scrolling ? correction : 0);
         if (&visual == &visuals_.front()) firstRenderedX_.store(x);
-        matrix.translate(static_cast<float>(x), static_cast<float>(visual.y));
-        entry.node->setMatrix(matrix);
+        // setMatrix marks the subtree dirty even for an identical transform.
+        // In particular a stationary bottom caption must not expand each
+        // scrolling frame's damaged region to the full height of the window.
+        const float tx = static_cast<float>(x), ty = static_cast<float>(visual.y);
+        const auto& current = entry.node->matrix();
+        if (current(0, 3) != tx || current(1, 3) != ty) {
+            QMatrix4x4 matrix;
+            matrix.translate(tx, ty);
+            entry.node->setMatrix(matrix);
+        }
         if (entry.texture) ++images;
         else if (imageBackend_) {
             switch (entry.reason) {
@@ -354,6 +418,15 @@ QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
             case TextTextureCache::Reason::Allocation: ++allocation; break;
             default: break;
             }
+        }
+    }
+    if (traceEnabled_) {
+        // Arrival order is stable until retirement. A fixed caption can be first.
+        const auto it = std::find_if(visuals_.begin(), visuals_.end(), [](const Visual& v) { return v.scrolling; });
+        if (it != visuals_.end()) {
+            tracePoint_.id = it->id;
+            tracePoint_.engineX = it->x;
+            tracePoint_.drawnX = root->entries.at(it->id).node->matrix()(0, 3);
         }
     }
     imageNodes_.store(images);

@@ -15,6 +15,7 @@
 #include <QScopedValueRollback>
 #include <QUrl>
 #include <QSurfaceFormat>
+#include <QSGRendererInterface>
 #include <algorithm>
 #include <cmath>
 #include <chrono>
@@ -34,7 +35,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
                              ToolbarPointerMonitor::CursorQuery cursorQuery, WindowLayerController::Positioner positioner,
                              VideoOpenService::Hooks videoHooks)
     : QObject(parent), settings_(dataDirectory),
-      logs_(dataDirectory),
+      logs_(dataDirectory), frameTrace_(dataDirectory),
       coordinator_(this),
       danmaku_(dataDirectory, cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       library_(danmaku_.library_),
@@ -163,6 +164,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     // foreground tracking alive without driving a second visible animation loop.
     connect(&timer_, &QTimer::timeout, this, [this] {
         updatePresentationVisibility();
+        if (mpvRasterMode_ && playing_ && visible_) updateRasterWorkload();
         if (!overlay_ || !overlay_->isVisible() || !overlay_->isExposed() || !visible_ || !playing_) {
             ++maintenanceTicks_;
             tick();
@@ -193,6 +195,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     logs_.append("INFO", QStringLiteral("C++ / Qt FluentWinUI3 已启动"));
 }
 AppController::~AppController() {
+    frameTrace_.setPlaybackRunning(false);
     external_.deactivate();
     media_.deactivate();
     windowLayers_.attach(nullptr, nullptr, nullptr);
@@ -268,6 +271,12 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
     }
     connect(overlay_, &QWindow::widthChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::heightChanged, this, [this] { configure(); });
+    connect(renderer_, &DanmakuItem::desktopScaleChanged, this, [this] {
+        if (running_ && visible_ && renderer_ && danmakuVisible_) {
+            snapshotDirty_ = true;
+            tick();
+        }
+    }, Qt::QueuedConnection);
     connect(overlay_, &QWindow::visibleChanged, this, [this](bool shown) {
         frameRequestTimer_.stop();
         framePacer_.reset();
@@ -275,12 +284,28 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
         windowLayers_.reconcile(settings_.values()["onTop"].toBool(), panelForeground_, desiredOverlayAllowed_);
         toolbarPointer_.setEnabled(toolbarAllowed_ && shown);
         snapshotDirty_ = true;
+        if (!shown && renderer_) renderer_->enableDesktopScroll(false);
         if (shown && running_ && visible_ && renderer_) {
             // Replace the last visible snapshot before exposure, including paused reappearance.
-            renderer_->present(engine_);
+            presentEngine();
         }
     });
     if (auto* quick = qobject_cast<QQuickWindow*>(overlay)) {
+        if (mpvRasterMode_) {
+            auto bindScreen = [this](QScreen* screen) {
+                disconnect(refreshRateConnection_);
+                if (screen)
+                    refreshRateConnection_ = connect(screen, &QScreen::refreshRateChanged, this, &AppController::updateFrameLimit);
+                updateFrameLimit();
+            };
+            connect(quick, &QWindow::screenChanged, this, bindScreen);
+            bindScreen(quick->screen());
+        }
+        frameTrace_.attach(quick, renderer_, [this] {
+            return FrameTraceRecorder::Context{frameTicks_, mediaGeneration_, sampleResets_, traceTickNs_,
+                position_, manual_ ? 1.0 : rate_, lastSettings_.value("maxFps").toInt(), playing_,
+                bool(running_ && visible_ && danmakuVisible_ && overlay_ && overlay_->isExposed()), effectiveFrameLimit_};
+        });
         const auto timing = std::make_shared<RenderTiming>();
         connect(quick, &QQuickWindow::beforeFrameBegin, this, [timing] {
             timing->begin = frameTimestamp();
@@ -299,7 +324,7 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
         connect(quick, &QQuickWindow::afterAnimating, this, [this, quick] {
             ++animationCallbacks_;
             if (running_ && visible_ && quick->isVisible() && quick->isExposed() && (playing_ || snapshotDirty_)) {
-                if (playing_ && settings_.values().value("maxFps").toInt() > 0 &&
+                if (playing_ && effectiveFrameLimit_ > 0 &&
                     framePacer_.started()) {
                     // Capped frames prepare their snapshot before requesting a
                     // render. Do not publish it again during afterAnimating.
@@ -316,7 +341,7 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
                 const auto frame = *timing;
                 QMetaObject::invokeMethod(this, [this, presentedAt, frame] {
                     ++renderedFrames_;
-                    if (running_ && playing_ && visible_) {
+                    if (running_ && playing_ && visible_ && renderer_ && !renderer_->desktopActive()) {
                         if (lastPresentedTick_ != frame.tick) {
                             if (presentationTime_.isValid()) {
                                 presentationIntervals_.push_back((presentedAt - lastPresentationNs_) * 1e-6);
@@ -352,14 +377,68 @@ void AppController::clearError() {
     danmaku_.error_.clear();
     emit stateChanged();
 }
+void AppController::prepareGraphics() {
+    if (!settings_.values().value("mpvSmoothOverlay").toBool() || QGuiApplication::platformName() != "windows") return;
+    // Explicit Qt backend selections also serve as the diagnostic fallback.
+    const auto backend = qgetenv("QT_QUICK_BACKEND");
+    if ((!backend.isEmpty() && backend != "software") || !qgetenv("QSG_RHI_BACKEND").isEmpty() ||
+        qgetenv("QSG_SOFTWARE_RENDERER_FORCE_PARTIAL_UPDATES") == "0") return;
+    qputenv("QSG_SOFTWARE_RENDERER_FORCE_PARTIAL_UPDATES", "1");
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    mpvRasterMode_ = true;
+    logs_.append("INFO", QStringLiteral("mpv 高负载模式已启用，使用 Qt 软件渲染和局部更新"));
+}
+void AppController::updateFrameLimit() {
+    int limit = settings_.values().value("maxFps").toInt();
+    if (mpvRasterMode_ && !limit) {
+        // The software render loop has no swap-chain vsync. With mpv leave
+        // time for video filters by pacing to a divisor of the display refresh.
+        const auto* screen = overlay_ ? overlay_->screen() : nullptr;
+        const int hz = screen && screen->refreshRate() >= 1 ? qRound(screen->refreshRate()) : 60;
+        const int maximum = rasterCrowded_ ? 40 : 80;
+        const int divisor = (hz + maximum - 1) / maximum;
+        limit = std::max(1, qRound(double(hz) / divisor));
+    }
+    if (limit == effectiveFrameLimit_) return;
+    effectiveFrameLimit_ = limit;
+    frameRequestTimer_.stop();
+    // A workload check can arrive between frames. Start the new interval at
+    // the last publication so the check itself does not introduce a pause.
+    framePacer_.configure(limit, playing_);
+    if (lastSettings_.value("maxFps") != settings_.values().value("maxFps")) {
+        presentationTime_.invalidate(); presentationIntervals_.clear(); renderTimings_.clear();
+    }
+    requestNextFrame();
+}
+void AppController::updateRasterWorkload() {
+    const auto now = monotonicTime_.elapsed();
+    if (now < nextRasterCheckMs_ || !overlay_ || lastSettings_.value("maxFps").toInt() > 0) return;
+    nextRasterCheckMs_ = now + 200;
+    // Windows flushes one bounding rectangle for the layered backing store.
+    // Scattered moving comments can therefore cost more than their glyph areas.
+    const QRectF viewport(QPointF(), QSizeF(overlay_->size()));
+    QRectF moving;
+    if (danmakuVisible_) {
+        for (const auto slot : engine_.activeIndices()) {
+            const auto& line = engine_.activeSlots()[slot];
+            if (line.mode == danmaku::Mode::Scroll)
+                moving |= viewport.intersected(QRectF(line.x, line.y, line.width, line.height));
+        }
+    }
+    const auto dpr = overlay_->devicePixelRatio();
+    rasterMotionPixels_ = qRound64(moving.width() * moving.height() * dpr * dpr);
+    // About 6 MiB of premultiplied pixels per update. Retain the slower cadence
+    // across brief gaps so adjacent rows entering/leaving do not change rhythm.
+    if (rasterMotionPixels_ >= 1536 * 1024) rasterBusyUntilMs_ = now + 2000;
+    const bool crowded = now < rasterBusyUntilMs_;
+    if (crowded != rasterCrowded_) {
+        rasterCrowded_ = crowded;
+        updateFrameLimit();
+    }
+}
 void AppController::configure() {
     const auto s = settings_.values();
-    if (lastSettings_.value("maxFps") != s["maxFps"]) {
-        frameRequestTimer_.stop();
-        framePacer_.configure(s["maxFps"].toInt());
-        presentationTime_.invalidate(); presentationIntervals_.clear(); renderTimings_.clear();
-        requestNextFrame();
-    }
+    updateFrameLimit();
     media_.configure(s["danmakuServers"].toStringList());
     library_.setServers(s["danmakuServers"].toStringList());
     metadata_.setShowChineseAnime(s["homeShowChineseAnime"].toBool());
@@ -402,7 +481,8 @@ void AppController::configure() {
     }
     const QStringList rendererKeys{"fontFamily", "fontSize", "strokeWidth", "speed", "fixedSeconds",
                                    "maxActive", "maxTracks", "lineSpacing", "overlap", "opacity",
-                                   "textureBudgetAuto", "textureBudgetMiB", "fontWeight", "uniformFontSize", "textColor"};
+                                   "textureBudgetAuto", "textureBudgetMiB", "fontWeight", "uniformFontSize", "textColor",
+                                   "mpvCompositionScroll", "maxFps", "debug"};
     const auto appearance = danmakuStyle(s, coordinator_.owner() == PlaybackCoordinator::External, external_.localXml());
     bool changed = appliedRendererSettings_.isEmpty();
     for (const auto& key : rendererKeys)
@@ -473,7 +553,7 @@ void AppController::applyRendererSettings() {
                             measure ? danmaku::Engine::Measure([this](const auto& item) { return renderer_->measure(item); })
                                     : danmaku::Engine::Measure{});
     // Present even while paused; appearance edits must not depend on playback resuming.
-    renderer_->present(engine_);
+    presentEngine();
     appliedRendererSettings_ = s;
     if (overlay_) {
         appliedRendererSettings_["width"] = overlay_->width();
@@ -646,13 +726,14 @@ void AppController::start(bool manual) {
         quick->setPersistentGraphics(true);
     }
     running_ = true;
+    frameTrace_.setPlaybackRunning(true);
     playing_ = manual;
     snapshotDirty_ = true;
     rate_ = 1;
     mediaIdentity_.clear();
     sampleTime_.invalidate();
     engine_.seek(danmakuPosition());
-    renderer_->present(engine_);
+    presentEngine();
     updatePresentationVisibility(true, false);
     setPlaybackState(manual ? Playing : WaitingForPlayer);
     frameTime_.start();
@@ -762,6 +843,7 @@ void AppController::applyChineseConversion() {
     }
 }
 void AppController::resetPlayback(bool unloadSource) {
+    frameTrace_.setPlaybackRunning(false);
     disconnectCleanup_.stop();
     disconnectedContentCleared_ = false;
     timer_.stop();
@@ -769,6 +851,9 @@ void AppController::resetPlayback(bool unloadSource) {
     framePacer_.reset();
     presentationTime_.invalidate(); presentationIntervals_.clear(); renderTimings_.clear();
     running_ = playing_ = visible_ = demo_ = false;
+    rasterCrowded_ = false;
+    nextRasterCheckMs_ = rasterBusyUntilMs_ = rasterMotionPixels_ = 0;
+    if (mpvRasterMode_) updateFrameLimit();
     toolbarAllowed_ = desiredOverlayAllowed_ = false;
     windowLayers_.reconcile(settings_.values()["onTop"].toBool(), false, false);
     toolbarPointer_.setEnabled(false);
@@ -875,12 +960,26 @@ void AppController::setPlaybackState(PlaybackState state) {
 double AppController::danmakuPosition() const {
     return manual_ ? position_ : std::max(0.0, position_ + settings_.values()["timeOffset"].toDouble());
 }
+void AppController::presentEngine(bool animationTick) {
+    const auto& settings = settings_.values();
+    const bool desktop = mpvRasterMode_ && coordinator_.owner() == PlaybackCoordinator::External &&
+        running_ && visible_ && danmakuVisible_ && settings.value("mpvCompositionScroll").toBool() &&
+        settings.value("maxFps").toInt() == 0 && !settings.value("debug").toBool();
+    const bool wasDesktop = renderer_->desktopActive();
+    renderer_->enableDesktopScroll(desktop);
+    const double velocity = (desktop || animationTick) && playing_
+        ? settings.value("speed").toDouble() * (manual_ ? 1 : rate_) : 0;
+    renderer_->present(engine_, velocity);
+    if (wasDesktop != renderer_->desktopActive()) {
+        presentationTime_.invalidate(); presentationIntervals_.clear(); renderTimings_.clear();
+    }
+}
 void AppController::resetDanmakuTimeline() {
     engine_.seek(danmakuPosition());
     mediaClock_.takeMotion();
     snapshotDirty_ = true;
     if (renderer_) {
-        if (danmakuVisible_) renderer_->present(engine_);
+        if (danmakuVisible_) presentEngine();
         else renderer_->clearContent();
         renderer_->update();
     }
@@ -923,6 +1022,8 @@ void AppController::onSample(const MediaSample& s) {
     const double age = MediaMonitor::monotonicSeconds() - s.observedAt;
     if (age < 0 || age > 2.5) return;
     lastSampleObservedAt_ = s.observedAt;
+    const bool wasPlaying = playing_;
+    const double oldRate = rate_;
     sampleAgeAtReceive_ = age;
     ++mediaSamples_;
     if (!s.found || s.playback == MediaSample::Playback::Closed ||
@@ -932,6 +1033,10 @@ void AppController::onSample(const MediaSample& s) {
         syncConnected_ = false;
         playing_ = false;
         sampleTime_.invalidate();
+        if (wasPlaying && renderer_ && renderer_->desktopActive()) {
+            snapshotDirty_ = true;
+            tick();
+        }
         if (playbackState_ != WaitingForPlayer) {
             setPlaybackState(WaitingForPlayer);
             emit stateChanged();
@@ -949,13 +1054,14 @@ void AppController::onSample(const MediaSample& s) {
     if (s.duration > 0) actual = std::min(actual, s.duration);
     const bool stopped = s.playback == MediaSample::Playback::Stopped;
     const auto identity = automaticSource_ && coordinator_.owner() == PlaybackCoordinator::Danmaku ? automatic_.contentIdentity() : s.identity;
-    const bool changed = !syncConnected_ || mediaIdentity_ != identity ||
+    const bool changed = !syncConnected_ || mediaIdentity_ != identity || mediaTimelineRevision_ != s.timelineRevision ||
                          (stopped && playbackState_ != PlayerStopped);
     const bool reset = mediaClock_.synchronize(actual, rate, samplePlaying,
                                 monotonicTime_.nsecsElapsed() * 1e-9, changed);
     if (reset) {
         ++sampleResets_;
     }
+    mediaTimelineRevision_ = s.timelineRevision;
     mediaIdentity_ = identity;
     mediaTitle_ = s.title;
     duration_ = s.duration;
@@ -967,6 +1073,10 @@ void AppController::onSample(const MediaSample& s) {
     sampleTime_.start();
     setPlaybackState(stopped ? PlayerStopped : playing_ ? Playing : Paused);
     updatePresentationVisibility(true, false);
+    if ((wasPlaying != playing_ || oldRate != rate_) && renderer_ && renderer_->desktopActive()) {
+        snapshotDirty_ = true;
+        tick();
+    }
     if (playing_) requestNextFrame();
     emit stateChanged();
     emit metricsChanged();
@@ -986,7 +1096,7 @@ void AppController::requestNextFrame() {
             frameRequestTimer_.start(std::chrono::nanoseconds(delay));
     } else {
         frameRequestTimer_.stop();
-        if (settings_.values().value("maxFps").toInt() > 0) {
+        if (effectiveFrameLimit_ > 0) {
             // Publish before Qt begins this frame, so Item::update does not
             // enqueue an extra frame from inside afterAnimating. The capped
             // and uncapped drivers are mutually exclusive and share tick().
@@ -999,6 +1109,7 @@ void AppController::requestNextFrame() {
 void AppController::tick() {
     if (!running_ || !renderer_)
         return;
+    if (frameTrace_.recording()) traceTickNs_ = frameTimestamp();
     const bool visibilityChanged = updatePresentationVisibility();
     if (rendererSettingsPending_) applyRendererSettings();
     // Independent playback begins on first exposure. Before that, the hidden-window
@@ -1022,6 +1133,7 @@ void AppController::tick() {
         position_ = mediaClock_.position();
         syncConnected_ = false;
         setPlaybackState(SyncTimeout);
+        snapshotDirty_ = true;
         emit stateChanged();
     }
     if (playing_) {
@@ -1040,13 +1152,14 @@ void AppController::tick() {
     const double motion = manual_ ? elapsed : mediaClock_.takeMotion();
     QElapsedTimer stage;
     stage.start();
-    engine_.tick(danmakuPosition(), motion, playing_,
+    const bool lastMotion = !manual_ && !playing_ && motion > 0 && renderer_->desktopActive();
+    engine_.tick(danmakuPosition(), motion, playing_ || lastMotion,
                  [this](const auto& item) { return renderer_->measure(item); }, renderable);
     engineMs_ += stage.nsecsElapsed() * 1e-6;
     stage.restart();
     if (renderable && (playing_ || visibilityChanged || snapshotDirty_)) {
         if (danmakuVisible_) {
-            renderer_->present(engine_, playing_ ? settings_.values()["speed"].toDouble() * (manual_ ? 1 : rate_) : 0);
+            presentEngine(true);
         } else {
             renderer_->clearContent();
         }
@@ -1065,11 +1178,18 @@ void AppController::tick() {
         }
     }
     ++frames_;
+    // Retained motion needs no Qt swap to trigger the next admission, including
+    // the first exposure or a rate change handled directly from a media sample.
+    if (renderer_->desktopActive() && running_ && playing_ && visible_ && !frameRequestTimer_.isActive())
+        frameRequestTimer_.start(std::chrono::nanoseconds(std::max<qint64>(1, frameDelayNs())));
 }
 void AppController::updateMetrics() {
     metrics_ = MediaMonitor::processMetrics();
     metrics_["active"] = static_cast<int>(engine_.activeCount());
     metrics_["maxFps"] = settings_.values().value("maxFps").toInt();
+    metrics_["mpvSmoothOverlayActive"] = mpvRasterMode_;
+    metrics_["effectiveMaxFps"] = effectiveFrameLimit_;
+    metrics_["rasterMotionBoundsPixels"] = rasterMotionPixels_;
     metrics_["highResolutionPacing"] = frameRequestTimer_.highResolution();
     metrics_["dropped"] = static_cast<qulonglong>(engine_.dropped());
     metrics_["retiredBySettings"] = static_cast<qulonglong>(engine_.retiredBySettings());
@@ -1097,6 +1217,20 @@ void AppController::updateMetrics() {
         metrics_["cacheHits"] = static_cast<qulonglong>(renderer_->cacheHits());
         metrics_["cacheMisses"] = static_cast<qulonglong>(renderer_->cacheMisses());
         metrics_["renderBackend"] = renderer_->imageBackend() ? "cached-raster" : "qt-text";
+        metrics_["desktopScrollActive"] = renderer_->desktopActive();
+        metrics_["desktopScrollTargetFps"] = renderer_->desktopActive() ? renderer_->desktopCadence() : 0;
+        metrics_["presentationMetricsSource"] = renderer_->desktopActive() ? "desktop-composition-external-measurement" : "qt-frameSwapped";
+        const auto& desktop = renderer_->desktopLayer();
+        metrics_["desktopScrollVisuals"] = desktop.count();
+        metrics_["desktopScrollRefreshAligned"] = desktop.refreshAligned();
+        metrics_["desktopScrollAnimationFps"] = desktop.animationCadence();
+        metrics_["desktopScrollIndividualVisuals"] = desktop.individualCount();
+        metrics_["desktopScrollSharedVisuals"] = desktop.sharedCount();
+        metrics_["desktopScrollIndividualKeyframes"] = desktop.individualKeyframes();
+        metrics_["desktopScrollBytes"] = desktop.bytes();
+        metrics_["desktopScrollUploads"] = desktop.uploads();
+        metrics_["desktopScrollCommits"] = desktop.commits();
+        metrics_["desktopScrollResult"] = qint64(desktop.lastError());
         metrics_["snapshotCount"] = renderer_->snapshotCount();
         metrics_["snapshotAgeMs"] = renderer_->snapshotAgeMs();
         metrics_["imageNodes"] = renderer_->imageNodeCount();
@@ -1209,7 +1343,7 @@ void AppController::writeReport(const QString& path) {
     metrics_["overlayVisible"] = visible_;
     metrics_["mainVisible"] = mainWindow_ && mainWindow_->isVisible();
     metrics_["metricNote"] =
-        "p95/p99 are GUI tick intervals; presentP95/P99 and 1% low use distinct-content render-thread frameSwapped timestamps, not optical FPS; renderWait includes beginFrame/backpressure, renderCpu includes sync/record, renderSubmit includes endFrame/Present; CPU normalized across logical processors";
+        "p95/p99 use GUI ticks. Qt presentation metrics use distinct frameSwapped timestamps. Desktop composition motion requires an external output measurement. renderWait covers beginFrame/backpressure, renderCpu covers sync/record, renderSubmit covers endFrame/Present. CPU normalized across logical processors.";
     if (overlay_) {
         const auto rect = overlay_->geometry();
         metrics_["overlayRect"] = QVariantList{rect.x(), rect.y(), rect.width(), rect.height()};
@@ -1230,7 +1364,7 @@ void AppController::setDanmakuVisible(bool visible) {
     if (!danmakuVisible_ && renderer_) {
         renderer_->clearContent();
     } else if (danmakuVisible_ && renderer_) {
-        renderer_->present(engine_);
+        presentEngine();
     }
     if (overlay_) {
         if (auto* quick = qobject_cast<QQuickWindow*>(overlay_))

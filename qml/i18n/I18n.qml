@@ -303,8 +303,12 @@ QtObject {
         speedTitle: "滚动速度（逻辑像素/秒）",
         speedAccessible: "滚动速度（逻辑像素/秒）",
         maxFpsTitle: "弹幕帧率上限（FPS）",
-        maxFpsDesc: "0 表示不限帧，跟随显示器刷新；修改后即时生效。",
-        maxFpsAccessible: "弹幕帧率上限，0 表示不限帧",
+        maxFpsDesc: "0 跟随显示器刷新。正值可指定上限，修改后即时生效。",
+        maxFpsAccessible: "弹幕帧率上限，0 表示自动",
+        mpvSmoothTitle: "mpv 高负载模式",
+        mpvSmoothDesc: "局部刷新透明窗口，给视频滤镜留出渲染时间。重启 DanmaX 后生效。",
+        mpvCompositionTitle: "由 Windows 移动滚动弹幕",
+        mpvCompositionDesc: "跟随外部 mpv 且上限为 0 时，Windows 按屏幕刷新率的分频移动文字，最高约 80 FPS。开启调试面板或指定帧率时使用局部刷新。",
         maxActiveTitle: "最大在屏弹幕",
         maxActiveAccessible: "最大在屏弹幕",
         maxTracksTitle: "最大轨道数",
@@ -372,6 +376,8 @@ QtObject {
 
         // 诊断
         diagnosticsSection: "诊断",
+        frameTraceTitle: "记录一次弹幕逐帧诊断",
+        frameTraceDesc: "采集滚动坐标和提交时间，首个可见播放帧后记录 60 秒。文件保存在数据目录的 diagnostics 文件夹。",
         debugTitle: "显示调试信息",
         debugAccessible: "显示调试信息",
         debugPosTitle: "调试信息位置",

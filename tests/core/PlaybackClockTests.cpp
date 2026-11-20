@@ -21,6 +21,13 @@ int main() {
     ok &= check(pacer.delay(15000000) == 13571429, "Late wakeup does not shift every later frame");
     pacer.published(1000000000);
     ok &= check(pacer.delay(1000000000) == 14285715, "A long stall skips missed frames");
+    pacer.configure(80); pacer.published(100000000);
+    pacer.configure(40, true);
+    ok &= check(pacer.delay(110000000) == 15000000, "Changing cadence preserves the time of the last real frame");
+    pacer.configure(80, true);
+    ok &= check(pacer.delay(130000000) == 0, "An overdue frame may run immediately after speeding up");
+    pacer.reset(); pacer.configure(40, true);
+    ok &= check(!pacer.started(), "A new session never inherits the old cadence anchor");
     pacer.configure(144); pacer.published(0);
     for (int i = 1; i < 2000; ++i) {
         const auto deadline = (std::int64_t(i) * 1000000000 + 143) / 144;

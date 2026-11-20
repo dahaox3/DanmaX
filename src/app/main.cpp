@@ -174,6 +174,7 @@ int main(int argc, char* argv[]) {
         }
         qmlRegisterType<DanmakuItem>("DanmaX.Native", 1, 0, "DanmakuCanvas");
         AppController controller(paths.data, nullptr, {}, paths.cache);
+        controller.prepareGraphics();
         broker.receive = [&](const QVariantMap& request) -> QString {
             if (request.value("action") == "local-xml")
                 return qobject_cast<ExternalPlaybackSession*>(controller.externalPlayback())->openLocalXml(request.value("descriptor").toMap());

@@ -168,6 +168,19 @@ class ExternalPlaybackTests final : public QObject {
         QTRY_VERIFY_WITH_TIMEOUT(backend.latest().found, 3000);
         QCOMPARE(backend.latest().generation, quint64(7)); QCOMPARE(backend.latest().position, 42.5);
         QTRY_COMPARE(backend.latest().rate, 1.5); QVERIFY(!backend.latest().mediaUri.contains("private"));
+        const auto identity = backend.latest().identity;
+        auto event = [&](const QJsonObject& object) {
+            player.clients.front()->write(QJsonDocument(object).toJson(QJsonDocument::Compact) + '\n');
+        };
+        event({{"event", "property-change"}, {"name", "paused-for-cache"}, {"data", true}});
+        QTRY_COMPARE(backend.latest().playback, MediaSample::Playback::Paused);
+        event({{"event", "property-change"}, {"name", "paused-for-cache"}, {"data", false}});
+        QTRY_COMPARE(backend.latest().playback, MediaSample::Playback::Playing);
+        player.values["time-pos"] = 42.55;
+        event({{"event", "seek"}});
+        QTRY_COMPARE(backend.latest().timelineRevision, quint64(1));
+        QCOMPARE(backend.latest().position, 42.55);
+        QCOMPARE(backend.latest().identity, identity);
         player.values["pause"] = true; QTRY_VERIFY(!backend.latest().playing);
         player.values["time-pos"] = 5.0; QTRY_COMPARE(backend.latest().position, 5.0);
         auto process = d.value("process").toMap(); process["created"] = "1"; d["process"] = process;

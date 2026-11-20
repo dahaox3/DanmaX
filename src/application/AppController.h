@@ -20,6 +20,7 @@
 #include "platform/windows/SystemUiPreferences.h"
 #include "infrastructure/ChineseConverter.h"
  #include "renderer/DanmakuItem.h"
+#include "renderer/FrameTraceRecorder.h"
  #include "platform/windows/ToolbarInputFilter.h"
 #include "platform/windows/ToolbarPointerMonitor.h"
 #include "platform/windows/WindowLayerController.h"
@@ -36,6 +37,7 @@ class AppController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QObject* settings READ settings CONSTANT)
     Q_PROPERTY(QObject* logs READ logs CONSTANT)
+    Q_PROPERTY(QObject* frameTrace READ frameTrace CONSTANT)
     Q_PROPERTY(QObject* library READ library CONSTANT)
     Q_PROPERTY(QObject* automatic READ automatic CONSTANT)
     Q_PROPERTY(QObject* videoOpen READ videoOpen CONSTANT)
@@ -91,6 +93,7 @@ class AppController final : public QObject {
     QObject* logs() {
         return &logs_;
     }
+    QObject* frameTrace() { return &frameTrace_; }
     QObject* library() { return &library_; }
     QObject* automatic() { return &automatic_; }
     QObject* videoOpen() { return &videoOpen_; }
@@ -167,6 +170,7 @@ class AppController final : public QObject {
         return metrics_;
     }
     bool hasFluentIcons() const;
+    void prepareGraphics(); // Once at startup, before the first Quick window exists.
     Q_INVOKABLE void attach(QObject* renderer, QObject* overlay, QObject* toolbar = nullptr,
                            QObject* mainWindow = nullptr);
     Q_INVOKABLE void loadFile(const QString& path);
@@ -221,12 +225,15 @@ class AppController final : public QObject {
     void tick();
     qint64 frameDelayNs() const;
     void requestNextFrame();
+    void updateFrameLimit();
+    void updateRasterWorkload();
     void configure();
     void applyRendererSettings();
     void discardLoad();
     void resetPlayback(bool unloadSource);
     void setPlaybackState(PlaybackState state);
     void resetDanmakuTimeline();
+    void presentEngine(bool animationTick = false);
     void clearDisconnectedContent();
     void commitItems(std::vector<danmaku::Item> items, const QString& title);
 
@@ -239,6 +246,9 @@ class AppController final : public QObject {
     static QString localPath(const QString& path);
     SettingsStore settings_;
     LogModel logs_;
+    FrameTraceRecorder frameTrace_;
+    qint64 traceTickNs_{};
+    quint64 mediaTimelineRevision_{};
     PlaybackCoordinator coordinator_;
     DanmakuSession danmaku_;
     DanmakuLibrary& library_;
@@ -275,6 +285,11 @@ class AppController final : public QObject {
     QTimer timer_, metricsTimer_, disconnectCleanup_;
     FrameWakeup frameRequestTimer_;
     danmaku::FramePacer framePacer_;
+    bool mpvRasterMode_{};
+    bool rasterCrowded_{};
+    qint64 nextRasterCheckMs_{}, rasterBusyUntilMs_{}, rasterMotionPixels_{};
+    int effectiveFrameLimit_{};
+    QMetaObject::Connection refreshRateConnection_;
     QElapsedTimer frameTime_, sampleTime_, foregroundTime_, metricsTime_;
     QElapsedTimer presentationTime_;
     std::vector<double> presentationIntervals_;

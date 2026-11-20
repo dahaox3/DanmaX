@@ -37,7 +37,7 @@ Window {
             width: Math.max(0, parent.width - 24)
             HudText {
                 objectName: "overlayDebugStatus"
-                text: overlay.backend.status
+                text: debugPanel.visible ? overlay.backend.status : ""
                 wrapMode: Text.NoWrap
                 elide: Text.ElideRight
                 maximumLineCount: 1
@@ -45,14 +45,14 @@ Window {
             HudText {
                 objectName: "overlayDebugTitle"
                 // Normalize presentation only; media identity and reports keep the full title.
-                text: overlay.backend.mediaTitle.replace(/[\r\n\t\u2028\u2029]+/g, " ").trim()
+                text: debugPanel.visible ? overlay.backend.mediaTitle.replace(/[\r\n\t\u2028\u2029]+/g, " ").trim() : ""
                 visible: text.length > 0
                 maximumLineCount: 2
                 elide: Text.ElideRight
             }
             HudText {
                 objectName: "overlayDebugMetrics"
-                text: overlay.backend.position.toFixed(1) + " s"
+                text: debugPanel.visible ? overlay.backend.position.toFixed(1) + " s"
                 + "\n" + I18n.format(I18n.overlay.activeDanmakuFormat, overlay.backend.metrics.active || 0, overlay.backend.metrics.dropped || 0)
                 + "\n" + I18n.format(I18n.overlay.frequencyFormat, Number(overlay.backend.metrics.presentedPerSecond || 0).toFixed(1), Number(overlay.backend.metrics.updatesPerSecond || 0).toFixed(1))
                 + "\n" + I18n.format(I18n.overlay.intervalFormat, Number(overlay.backend.metrics.p95Ms || 0).toFixed(1))
@@ -60,7 +60,7 @@ Window {
                     overlay.backend.metrics.onePercentLowFps ? Number(overlay.backend.metrics.onePercentLowFps).toFixed(1) : "…")
                 + "\n" + I18n.format(I18n.overlay.memoryFormat, Number(overlay.backend.metrics.memoryMiB || 0).toFixed(1))
                 + "\n" + I18n.format(I18n.overlay.textureBudgetFormat, Number((overlay.backend.metrics.textureEstimatedBytes || 0) / 1048576).toFixed(1), Number((overlay.backend.metrics.textureBudgetBytes || 0) / 1048576).toFixed(0))
-                + "\n" + I18n.format(I18n.overlay.fallbackFormat, overlay.backend.metrics.textFallbackNodes || 0, ((overlay.backend.metrics.textureFallbackReasons || {}).capacity || 0))
+                + "\n" + I18n.format(I18n.overlay.fallbackFormat, overlay.backend.metrics.textFallbackNodes || 0, ((overlay.backend.metrics.textureFallbackReasons || {}).capacity || 0)) : ""
             }
         }
     }

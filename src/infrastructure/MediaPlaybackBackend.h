@@ -11,6 +11,7 @@ struct MediaSample {
     Playback playback{Playback::Unknown};
     quint64 generation{}, sessionToken{};
     double observedAt{};
+    quint64 timelineRevision{}; // Explicit seek, independent of media identity.
 };
 Q_DECLARE_METATYPE(MediaSample)
 

@@ -144,6 +144,27 @@ PageFrame {
                 onValueModified: page.put("maxFps", value)
             }
         }
+        SettingsRow {
+            title: I18n.settings.mpvSmoothTitle
+            description: I18n.settings.mpvSmoothDesc
+            Switch {
+                objectName: "mpvSmoothOverlaySwitch"
+                checked: page.values.mpvSmoothOverlay
+                Accessible.name: I18n.settings.mpvSmoothTitle
+                onToggled: page.put("mpvSmoothOverlay", checked)
+            }
+        }
+        SettingsRow {
+            visible: page.values.mpvSmoothOverlay
+            title: I18n.settings.mpvCompositionTitle
+            description: I18n.settings.mpvCompositionDesc
+            Switch {
+                objectName: "mpvCompositionScrollSwitch"
+                checked: page.values.mpvCompositionScroll
+                Accessible.name: I18n.settings.mpvCompositionTitle
+                onToggled: page.put("mpvCompositionScroll", checked)
+            }
+        }
         Repeater {
             model: [
                 {key: "speed", title: I18n.settings.speedTitle, acc: I18n.settings.speedAccessible, min: 30, max: 1500},
@@ -645,6 +666,16 @@ PageFrame {
         objectName: "diagnosticsGroup"
         title: I18n.settings.diagnosticsSection; Layout.fillWidth: true
         SettingsRow { title: I18n.settings.debugTitle; Switch { objectName: "diagnosticsDebugSwitch"; checked: page.values.debug; Accessible.name: I18n.settings.debugAccessible; onToggled: page.put("debug", checked) } }
+        SettingsRow {
+            title: I18n.settings.frameTraceTitle
+            description: page.backend.frameTrace.status || I18n.settings.frameTraceDesc
+            Switch {
+                objectName: "diagnosticsFrameTraceSwitch"
+                checked: page.backend.frameTrace.enabled
+                Accessible.name: I18n.settings.frameTraceTitle
+                onToggled: page.backend.frameTrace.enabled = checked
+            }
+        }
         SettingsRow { title: I18n.settings.debugPosTitle; AppComboBox { model: I18n.settings.debugPosOptions; currentIndex: ["top_left","top_right","bottom_left","bottom_right"].indexOf(page.values.debugPosition); implicitWidth: 160; Accessible.name: I18n.settings.debugPosAccessible; onActivated: page.put("debugPosition", ["top_left","top_right","bottom_left","bottom_right"][currentIndex]) } }
         SettingsRow { title: I18n.settings.logLevelTitle; AppComboBox { model: I18n.settings.logLevelOptions; currentIndex: I18n.settings.logLevelOptions.indexOf(page.values.logLevel); implicitWidth: 160; Accessible.name: I18n.settings.logLevelAccessible; onActivated: page.put("logLevel", currentText) } }
         SettingsRow { title: I18n.settings.logToFileTitle; description: I18n.settings.logToFileDesc; Switch { checked: page.values.logToFile; Accessible.name: I18n.settings.logToFileAccessible; onToggled: page.put("logToFile", checked) } }

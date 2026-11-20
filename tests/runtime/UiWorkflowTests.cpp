@@ -313,9 +313,25 @@ private slots:
         QCoreApplication::sendEvent(window, &commit);
         QTest::keyClick(window, Qt::Key_Return);
         QTRY_COMPARE(settings->values().value("maxFps").toInt(), 144);
+        auto* smooth = window->findChild<QQuickItem*>("mpvSmoothOverlaySwitch");
+        QVERIFY(smooth);
+        QVERIFY(!smooth->property("checked").toBool());
+        QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(smooth))));
+        smooth->forceActiveFocus();
+        QTest::keyClick(window, Qt::Key_Space);
+        QTRY_VERIFY(settings->values().value("mpvSmoothOverlay").toBool());
+        auto* composition = window->findChild<QQuickItem*>("mpvCompositionScrollSwitch");
+        QVERIFY(composition && composition->isVisible());
+        QVERIFY(composition->property("checked").toBool());
+        QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(composition))));
+        composition->forceActiveFocus();
+        QTest::keyClick(window, Qt::Key_Space);
+        QTRY_VERIFY(!settings->values().value("mpvCompositionScroll").toBool());
         settings->flushPending();
         SettingsStore restored(directory.filePath("data"));
         QCOMPARE(restored.values().value("maxFps").toInt(), 144);
+        QVERIFY(restored.values().value("mpvSmoothOverlay").toBool());
+        QVERIFY(!restored.values().value("mpvCompositionScroll").toBool());
         QVERIFY(settings->setValue("maxFps", 0));
         QTRY_COMPARE(spin->property("value").toInt(), 0);
         auto* xmlSize = window->findChild<QQuickItem*>("localXmlFontSize"); QVERIFY(xmlSize);
@@ -337,6 +353,16 @@ private slots:
         }
         settings->flushPending(); SettingsStore xmlRestored(directory.filePath("data"));
         QCOMPARE(xmlRestored.values()["localXmlFontSize"].toInt(), 44);
+        auto* traceSwitch = window->findChild<QQuickItem*>("diagnosticsFrameTraceSwitch");
+        QVERIFY(traceSwitch);
+        QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(traceSwitch))));
+        traceSwitch->forceActiveFocus();
+        QTest::keyClick(window, Qt::Key_Space);
+        QTRY_VERIFY(QFile::exists(directory.filePath("data/diagnostics/next-frame-trace")));
+        auto* trace = qobject_cast<FrameTraceRecorder*>(backend.frameTrace());
+        QVERIFY(trace && trace->enabled());
+        trace->setEnabled(false);
+        QTRY_VERIFY(!traceSwitch->property("checked").toBool());
         QCOMPARE(warnings.count(), 0);
     }
 
@@ -2661,7 +2687,8 @@ ApplicationWindow {
                 property string mediaTitle: ""
                 property real position: 12345.6
                 property var metrics: ({ active: 5000, dropped: 12345, presentedPerSecond: 165,
-                    updatesPerSecond: 165, p95Ms: 123.4, memoryMiB: 2048.5,
+                    updatesPerSecond: 165, p95Ms: 123.4, presentP99Ms: 18.7, onePercentLowFps: 47.2,
+                    memoryMiB: 2048.5,
                     textureEstimatedBytes: 536870912, textureBudgetBytes: 1073741824,
                     textFallbackNodes: 5000, textureFallbackReasons: { capacity: 12345 } })
             }
@@ -2684,9 +2711,11 @@ ApplicationWindow {
         QTRY_VERIFY(window->isExposed());
         QTRY_COMPARE(panel->width(), 320.0);
         QCOMPARE(status->property("lineCount").toInt(), 1);
-        QCOMPARE(metrics->property("lineCount").toInt(), 7);
+        constexpr int metricLines = 8;
+        QCOMPARE(metrics->property("lineCount").toInt(), metricLines);
         const auto completeMetrics = metrics->property("text").toString();
         QVERIFY(completeMetrics.contains("12345.6 s"));
+        QVERIFY(completeMetrics.contains("18.7") && completeMetrics.contains("47.2"));
         QVERIFY(completeMetrics.contains("512.0"));
         QVERIFY(completeMetrics.contains("1024"));
         QVERIFY(!metrics->property("truncated").toBool());
@@ -2702,7 +2731,7 @@ ApplicationWindow {
             QVERIFY(title->property("lineCount").toInt() <= 2);
             QCOMPARE(title->property("truncated").toBool(), value.size() > 100);
             QCOMPARE(metrics->property("text").toString(), completeMetrics);
-            QCOMPARE(metrics->property("lineCount").toInt(), 7);
+            QCOMPARE(metrics->property("lineCount").toInt(), metricLines);
             QCOMPARE(backend->property("mediaTitle").toString(), value);
         }
         const auto literalTitle = QStringLiteral("<b>媒体标题</b>\r\n第二行\t片段\u2028尾部");
@@ -2737,7 +2766,7 @@ ApplicationWindow {
         QVERIFY(panel->setProperty("textPixelSize", 24.0));
         QTRY_VERIFY(qAbs(panel->width() - 320.0 * 24 / 14) < 0.01);
         QVERIFY(title->property("lineCount").toInt() <= 2);
-        QCOMPARE(metrics->property("lineCount").toInt(), 7);
+        QCOMPARE(metrics->property("lineCount").toInt(), metricLines);
         QVERIFY(!metrics->property("truncated").toBool());
         QVERIFY(panel->setProperty("textPixelSize", 14.0));
         QTRY_COMPARE(panel->width(), 320.0);

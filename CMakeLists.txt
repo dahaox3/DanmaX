@@ -174,11 +174,13 @@ if(DANMAKU_BUILD_APP)
         src/platform/windows/ToolbarPointerMonitor.cpp src/platform/windows/ToolbarPointerMonitor.h
         src/platform/windows/WindowLayerController.cpp src/platform/windows/WindowLayerController.h
         src/renderer/DanmakuItem.cpp src/renderer/DanmakuItem.h
+        src/platform/windows/DesktopScrollLayer.cpp src/platform/windows/DesktopScrollLayer.h
+        src/renderer/FrameTraceRecorder.cpp src/renderer/FrameTraceRecorder.h
         src/infrastructure/XmlLoader.cpp src/infrastructure/XmlLoader.h
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h
         src/infrastructure/LogModel.cpp src/infrastructure/LogModel.h
         src/infrastructure/ChineseConverter.cpp src/infrastructure/ChineseConverter.h)
-    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi version iphlpapi ws2_32 advapi32 PRIVATE danmax_anitomy)
+    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi version iphlpapi ws2_32 advapi32 PRIVATE dcomp d3d11 danmax_anitomy)
     qt_add_resources(danmaku_runtime vlc_bridge PREFIX "/vlc"
         BASE "${CMAKE_SOURCE_DIR}/resources/vlc" FILES "${CMAKE_SOURCE_DIR}/resources/vlc/status.json")
     target_include_directories(danmaku_runtime PRIVATE "${CMAKE_BINARY_DIR}/generated")
@@ -332,6 +334,9 @@ if(DANMAKU_BUILD_APP)
         add_test(NAME renderer_cache COMMAND renderer_tests)
         set_tests_properties(renderer_cache PROPERTIES TIMEOUT 60
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
+        add_test(NAME renderer_fractional_damage COMMAND renderer_tests incrementalMotionMatchesFullRepaint)
+        set_tests_properties(renderer_fractional_damage PROPERTIES TIMEOUT 30
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_SCALE_FACTOR=2.25;QSG_SOFTWARE_RENDERER_FORCE_PARTIAL_UPDATES=1")
         add_executable(frame_rate_tests tests/runtime/FrameRateTests.cpp)
         target_link_libraries(frame_rate_tests PRIVATE danmaku_runtime Qt6::Test)
         if(DANMAKU_STATIC_QT)

@@ -62,8 +62,23 @@ class TextTextureCache {
         QElapsedTimer preparation;
         preparation.start();
         const auto account = qScopeGuard([&] { preparationNs_ += preparation.nsecsElapsed(); });
-        QImage image(description.pixels, QImage::Format_ARGB32_Premultiplied);
+        auto image = rasterize(layout, description, color, stroke, dpr);
         if (image.isNull()) return {{}, Reason::Allocation};
+        auto* texture = window->createTextureFromImage(image, QQuickWindow::TextureCanUseAtlas);
+        if (!texture) return {{}, Reason::Allocation};
+        auto result = std::make_shared<Resource>();
+        result->texture.reset(texture);
+        result->size = QSizeF(description.pixels) / dpr;
+        result->bytes = bytes;
+        entries_.insert(description.key, result);
+        bytes_ += bytes;
+        uploaded_ += bytes;
+        return {result};
+    }
+    static QImage rasterize(const QTextLayout& layout, const Description& description,
+                            QRgb color, int stroke, qreal dpr) {
+        QImage image(description.pixels, QImage::Format_ARGB32_Premultiplied);
+        if (image.isNull()) return {};
         image.setDevicePixelRatio(dpr);
         image.fill(Qt::transparent);
         QPainter painter(&image);
@@ -90,16 +105,7 @@ class TextTextureCache {
                 composite.drawImage(p, outline);
             composite.drawImage(QPointF(), foreground);
         }
-        auto* texture = window->createTextureFromImage(image, QQuickWindow::TextureCanUseAtlas);
-        if (!texture) return {{}, Reason::Allocation};
-        auto result = std::make_shared<Resource>();
-        result->texture.reset(texture);
-        result->size = QSizeF(description.pixels) / dpr;
-        result->bytes = bytes;
-        entries_.insert(description.key, result);
-        bytes_ += bytes;
-        uploaded_ += bytes;
-        return {result};
+        return image;
     }
     void retireUnused() {
         for (auto it = entries_.begin(); it != entries_.end();) {

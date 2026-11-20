@@ -39,6 +39,75 @@ class FrameRateTests final : public QObject {
         }
     };
   private slots:
+    void oneShotFrameTrace() {
+        Fixture f;
+        auto* trace = qobject_cast<FrameTraceRecorder*>(f.app.frameTrace());
+        QVERIFY(trace);
+        const QDir output(f.directory.filePath("data/diagnostics"));
+        const auto marker = output.filePath("next-frame-trace");
+        const auto files = [&] { return output.entryList({"frames-*.csv"}, QDir::Files); };
+        QVERIFY(!trace->enabled());
+        // A request armed before the GUI starts must survive until actual playback.
+        {
+            FrameTraceRecorder arm(f.directory.filePath("data"));
+            arm.setEnabled(true); QVERIFY(QFile::exists(marker));
+            arm.setEnabled(false); QVERIFY(!QFile::exists(marker));
+            arm.setEnabled(true);
+        }
+        QFile xml(f.xml);
+        QVERIFY(xml.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        xml.write("<i><d p=\"0,5,25,16777215\">fixed first</d>"
+                  "<d p=\"0,1,25,16777215\">private scrolling text</d></i>");
+        xml.close();
+        f.start(40);
+        QTRY_VERIFY(trace->recording() && f.renderer.sceneEntries() == 2);
+        QVERIFY(!QFile::exists(marker));
+        QTest::qWait(250);
+        QVERIFY(files().isEmpty());
+        f.app.stop();
+        QVERIFY(!trace->enabled());
+        QTRY_COMPARE(files().size(), 1);
+        QFile csv(output.filePath(files().first()));
+        QVERIFY(csv.open(QIODevice::ReadOnly));
+        const auto content = csv.readAll();
+        QVERIFY(content.contains("# end=stop\n"));
+        QVERIFY(!content.contains("private scrolling text"));
+        QList<QByteArray> header;
+        quint64 priorId = 0;
+        qint64 priorSwap = 0;
+        double priorX = 0;
+        int sameIdMoving = 0;
+        for (const auto& line : content.split('\n')) {
+            if (line.isEmpty() || line.startsWith('#')) continue;
+            const auto fields = line.split(',');
+            if (header.isEmpty()) { header = fields; continue; }
+            QCOMPARE(fields.size(), header.size());
+            const auto get = [&](const char* key) { return fields.value(header.indexOf(key)); };
+            const auto swap = get("swap_ns").toLongLong();
+            QVERIFY(swap > priorSwap); priorSwap = swap;
+            if (get("visible") != "1" || get("playing") != "1" || get("id") == "0") continue;
+            const auto id = get("id").toULongLong();
+            const double x = get("engine_x").toDouble(), draw = get("draw_x").toDouble();
+            QVERIFY(get("snapshot_ns").toLongLong() > 0);
+            QVERIFY(get("scene_ns").toLongLong() >= get("snapshot_ns").toLongLong());
+            QVERIFY(swap >= get("scene_ns").toLongLong());
+            QCOMPARE(get("max_fps").toInt(), 40);
+            QCOMPARE(get("effective_max_fps").toInt(), 40);
+            QVERIFY(draw <= x + 0.001);
+            if (id == priorId && x < priorX) ++sameIdMoving;
+            priorId = id; priorX = x;
+        }
+        QVERIFY(sameIdMoving >= 2);
+        f.start(40);
+        QTRY_VERIFY(f.app.playing());
+        QVERIFY(!trace->recording());
+        trace->setEnabled(true);
+        QTRY_VERIFY(trace->recording());
+        QTest::qWait(75);
+        trace->setEnabled(false);
+        QTRY_COMPARE(files().size(), 2);
+        QVERIFY(!QFile::exists(marker));
+    }
     void pacingDistribution() {
         Fixture f;
         f.start(70);
