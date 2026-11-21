@@ -3728,6 +3728,68 @@ ApplicationWindow {
         QCoreApplication::processEvents();
         QVERIFY(!backdrop.effectiveMica());
     }
+    void danmakuSearchDialogOccludesHome_data() {
+        QTest::addColumn<bool>("external");
+        QTest::addColumn<QString>("theme");
+        for (const auto& theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+            QTest::newRow(qPrintable("search-" + theme)) << false << theme;
+            QTest::newRow(qPrintable("mpv-" + theme)) << true << theme;
+        }
+    }
+    void danmakuSearchDialogOccludesHome() {
+        QFETCH(bool, external); QFETCH(QString, theme);
+        QTemporaryDir dir;
+        AppController backend(dir.filePath("data"), nullptr, {}, dir.filePath("cache"));
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
+        settings->setDanmakuServers({}); settings->setValue("theme", theme);
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        window->resize(1000, 720); window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* dialog = window->findChild<QObject*>(external ? "externalMatchingDialog" : "matchingRecoveryDialog");
+        QVERIFY(dialog);
+        if (external) QVERIFY(QMetaObject::invokeMethod(backend.externalPlayback(), "showChoice"));
+        else backend.showOnlineDanmakuForAnime({});
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        const auto output = qEnvironmentVariable("DANMAKU_DIALOG_ARTIFACTS");
+        if (!output.isEmpty()) {
+            QVERIFY(QDir().mkpath(output));
+            QVERIFY(window->grabWindow().save(output + '/' + QTest::currentDataTag() + ".png"));
+        }
+
+        // Change the page behind the actual modal. The page must change outside its
+        // bounds, but none of its colors may bleed through the title, body or footer.
+        auto* home = window->findChild<QQuickItem*>("mainScene"); QVERIFY(home);
+        QQmlComponent component(&engine);
+        component.setData("import QtQuick\nRectangle { anchors.fill: parent; z: 100; color: 'magenta' }", {});
+        std::unique_ptr<QQuickItem> pageColor(qobject_cast<QQuickItem*>(component.create()));
+        QVERIFY2(pageColor, qPrintable(component.errorString())); pageColor->setParentItem(home);
+        auto* overlay = dialog->property("parent").value<QQuickItem*>(); QVERIFY(overlay);
+        const auto origin = overlay->mapToScene({dialog->property("x").toReal(), dialog->property("y").toReal()});
+        const auto w = dialog->property("width").toReal(), h = dialog->property("height").toReal();
+        const auto pixel = [&](qreal x, qreal y) {
+            return ((origin + QPointF(x, y)) * window->devicePixelRatio()).toPoint();
+        };
+        const auto outside = pixel(-12, h / 2);
+        QImage before, after;
+        QTRY_VERIFY_WITH_TIMEOUT(!(before = window->grabWindow()).isNull() && before.rect().contains(outside)
+            && before.pixelColor(outside).red() > before.pixelColor(outside).green() + 50, 3000);
+        pageColor->setProperty("color", QColor(Qt::green));
+        QTRY_VERIFY_WITH_TIMEOUT(!(after = window->grabWindow()).isNull() && after.rect().contains(outside)
+            && after.pixelColor(outside).green() > after.pixelColor(outside).red() + 50, 3000);
+        for (const auto point : {pixel(14, 12), pixel(12, h / 2), pixel(w / 2, h * .75), pixel(14, h - 12)}) {
+            QVERIFY(after.rect().contains(point));
+            QCOMPARE(after.pixelColor(point), before.pixelColor(point));
+        }
+        QTest::keyClick(window, Qt::Key_Escape);
+        QTRY_VERIFY(!dialog->property("visible").toBool());
+        QCOMPARE(warnings.count(), 0);
+    }
     void popupSurfaceAndMotion() {
         QQmlApplicationEngine engine;
         QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);

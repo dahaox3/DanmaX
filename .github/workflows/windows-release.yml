@@ -48,7 +48,7 @@ jobs:
             Invoke-Checked $tools.CTest @('--preset', 'windows-release', '-E', '^(online_danmaku|anime_metadata|ui_workflow|overlay_toolbar)$')
             $env:QT_QPA_PLATFORM = 'offscreen'
             $env:QT_QUICK_BACKEND = 'software'
-            Invoke-Checked (Get-ProjectPath 'out/build/windows-release/bin/ui_workflow_tests.exe') @('mpvIntegrationConfigurationWorkflow', '-o', 'out/build/windows-release/mpv-ui-tests.txt,txt')
+            Invoke-Checked (Get-ProjectPath 'out/build/windows-release/bin/ui_workflow_tests.exe') @('mpvIntegrationConfigurationWorkflow', 'danmakuSearchDialogOccludesHome', '-o', 'out/build/windows-release/mpv-ui-tests.txt,txt')
           }
       - name: Build clean distribution and source materials
         env:

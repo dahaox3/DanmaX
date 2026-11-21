@@ -261,7 +261,7 @@ ColumnLayout {
     }
 
     // 6. 二次确认删除对话框
-    Dialog {
+    AppDialog {
         id: deleteDialog
         title: I18n.cache.deleteDialogTitle
         modal: true

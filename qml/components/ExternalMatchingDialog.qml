@@ -3,8 +3,9 @@ import QtQuick.Controls.FluentWinUI3
 import QtQuick.Layouts
 import "../theme"
 
-Dialog {
+AppDialog {
     id: dialog
+    objectName: "externalMatchingDialog"
     required property QtObject session
     parent: Overlay.overlay
     title: "为 mpv 选择外挂弹幕"

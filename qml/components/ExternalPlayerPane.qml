@@ -57,7 +57,7 @@ SettingsSection {
             onClicked: pane.manage()
         }
     }
-    Dialog {
+    AppDialog {
         id: manager
         objectName: "externalPlayerDialog"
         parent: Overlay.overlay

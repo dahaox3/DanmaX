@@ -366,7 +366,7 @@ PageFrame {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: serverDialog
         objectName: "danmakuServerDialog"
         parent: page
@@ -695,7 +695,7 @@ PageFrame {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: resetDialog
         title: I18n.settings.resetDialogTitle
         modal: true

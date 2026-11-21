@@ -60,14 +60,13 @@ SettingsSection {
         nameFilters: ["MPV (mpv.exe)"]
         onAccepted: pane.store.installXmlDrop(pane.store.localPath(selectedFile))
     }
-    Dialog {
+    AppDialog {
         id: manager
         objectName: "mpvIntegrationDialog"
         parent: Overlay.overlay
         anchors.centerIn: parent
         modal: true
         focus: true
-        background: PopupSurface { }
         title: "MPV 网页接入"
         width: Math.min(720, Math.max(0, parent.width - 32))
         height: Math.min(implicitHeight, Math.max(0, parent.height - 32))

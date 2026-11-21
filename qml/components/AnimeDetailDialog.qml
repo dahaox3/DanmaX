@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import "../theme"
 import "../i18n"
 
-Dialog {
+AppDialog {
     id: dialogRoot
     objectName: "animeDetailDialog"
     property var detail: ({})

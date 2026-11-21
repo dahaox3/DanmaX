@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import QtQuick.Dialogs
 import "../theme"
 
-Dialog {
+AppDialog {
     id: dialog
     objectName: "matchingRecoveryDialog"
     required property QtObject backend
